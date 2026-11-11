@@ -94,6 +94,7 @@ body {
 .ops-list { margin: 0 0 14px; padding: 0; list-style: none; font-size: 14px; font-variant-numeric: tabular-nums; }
 .ops-list li { padding: 4px 0; border-bottom: 1px solid var(--line); }
 .ops-list li.none { color: var(--muted); }
+.ops-dist { margin: -4px 0 14px; padding: 8px 10px; border-radius: 8px; background: #eaf1fb; font-weight: 700; font-variant-numeric: tabular-nums; white-space: pre-line; }
 .countdown {
   margin: 0 0 12px;
   padding: 12px;

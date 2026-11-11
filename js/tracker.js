@@ -199,6 +199,34 @@
     m[6] = st.meta.laps || 2;
     return m;
   }
+  /* ある種類のマークの、最後に打った位置（untilMs を渡すと、その時刻までに打ったもの）。無ければ null。 */
+  function markAt(type, untilMs) {
+    var last = null;
+    st.meta.marks.forEach(function (m) {
+      if (m[1] === type && m[2] !== null && m[3] !== null && (untilMs === undefined || m[0] <= untilMs)) last = m;
+    });
+    return last;
+  }
+  /* マークを打つ人のための距離の表示。1秒ごとに書き直す。
+   *   上下のマークの距離（両方打ってあるとき）
+   *   いまの位置から、打ってある各マークまでの距離（次のマークを決めた距離に打つため）
+   * 運営艇では、下マークまでの距離がスタートラインの長さ、フィニッシュマークまでの距離がフィニッシュラインの長さになる。 */
+  function renderDist() {
+    var el = $('opsDist');
+    if (!st.meta || !(st.meta.ops || st.meta.practice)) { el.hidden = true; return; }
+    var m1 = markAt('m1'), m4 = markAt('m4'), fin = st.meta.ops ? markAt('fin') : null, lines = [];
+    function d(a, b) { return Math.round(haversine(a[0], a[1], b[0], b[1])) + 'm'; }
+    if (m1 && m4) lines.push('上マーク〜下マーク: ' + d([m1[2], m1[3]], [m4[2], m4[3]]));
+    var f = st.fixes[st.fixes.length - 1];
+    if (f) {
+      var here = [f[1], f[2]];
+      if (m1) lines.push('いまの位置から上マークまで: ' + d(here, [m1[2], m1[3]]));
+      if (m4) lines.push('いまの位置から下マークまで: ' + d(here, [m4[2], m4[3]]) + (st.meta.ops ? '（スタートラインの長さ）' : ''));
+      if (fin) lines.push('いまの位置からフィニッシュマークまで: ' + d(here, [fin[2], fin[3]]) + '（フィニッシュラインの長さ）');
+    }
+    el.textContent = lines.join('\n');
+    el.hidden = !lines.length;
+  }
   function addMark(ev) {
     st.meta.marks.push(ev);
     store.set(META, st.meta);
@@ -309,9 +337,14 @@
     list.textContent = '';
     starts.forEach(function (m, i) {
       var li = document.createElement('li');
-      li.textContent = '第' + (i + 1) + 'レース　' + clock(m[0]) + ' スタート' + (m[6] ? '（' + m[6] + '周）' : '');
+      // そのスタートのときのライン長（スタートを記録した位置から、その時点の下マークまで）
+      var pin = m[2] !== null ? markAt('m4', m[0]) : null, extra = [];
+      if (m[6]) extra.push(m[6] + '周');
+      if (pin) extra.push('ライン ' + Math.round(haversine(m[2], m[3], pin[2], pin[3])) + 'm');
+      li.textContent = '第' + (i + 1) + 'レース　' + clock(m[0]) + ' スタート' + (extra.length ? '（' + extra.join('・') + '）' : '');
       list.appendChild(li);
     });
+    renderDist();
     $('btnStartCancel').hidden = starts.length === 0;
     $('opsLaps').value = String(st.meta.laps || 2);
     var cd = $('opsCountdown'), seq = st.meta.seq;
@@ -597,6 +630,7 @@
     if (!st.meta) return;
     if (st.meta.ops && st.recording) { tickOps(); if (st.meta.seq) renderOps(); }
     liveTick();
+    if (st.recording && (st.meta.ops || st.meta.practice)) renderDist();   // 動くと、マークまでの距離が変わる
     var elapsed = fmtDuration((Date.now() - st.meta.started) / 1000);
     $('vElapsed').textContent = elapsed;
     $('vCount').textContent = st.fixes.length;

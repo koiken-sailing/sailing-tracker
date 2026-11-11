@@ -44,6 +44,17 @@
   white-space: nowrap;
 }
 
+.lv-dist {
+  display: inline-block;
+  transform: translate(-50%, -50%);
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: rgba(23, 33, 43, .85);
+  color: #fff;
+  font: 700 12px/1.5 "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  white-space: nowrap;
+}
+
 /* 記録ページのリアルタイムモード: 画面全体を地図にして、タッチを受け付けない */
 #liveView {
   position: fixed;

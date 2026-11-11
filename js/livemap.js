@@ -103,6 +103,9 @@
     var up = 0;              // 画面の上に来る方位
     var autoFit = true, lastFit = 0, timer = null, running = false, busy = false, gotHistory = {};
     var fitting = false;     // 自分で地図を動かしている最中か（指で動かしたのと区別するため）
+    var startPos = null;     // 最後に記録されたスタートの位置（本部船の位置）
+    var guides = {};         // 距離の線とラベル（axis: 上下のマークの間、line: スタートライン）
+    var dists = { ud: null, line: null };
     var lastError = '';
 
     if (free) {
@@ -185,6 +188,46 @@
       }
     }
 
+    /* 2点の間に線を引き、まんなかに距離を書く。a か b が無ければ消す。 */
+    function drawGuide(key, a, b, style, prefix) {
+      var g = guides[key];
+      if (!a || !b) {
+        if (g) { map.removeLayer(g.line); map.removeLayer(g.label); delete guides[key]; }
+        return null;
+      }
+      var d = G.dist(proj.toXY(a.lat, a.lon), proj.toXY(b.lat, b.lon));
+      var mid = [(a.lat + b.lat) / 2, (a.lon + b.lon) / 2];
+      if (!g) {
+        g = guides[key] = {
+          line: L.polyline([], Object.assign({ renderer: canvas, interactive: false }, style)).addTo(map),
+          label: L.marker(mid, {
+            interactive: false, keyboard: false, zIndexOffset: 400,
+            icon: L.divIcon({ className: '', iconSize: [0, 0], html: '<div class="lv-dist"></div>' })
+          }).addTo(map)
+        };
+        g.text = g.label.getElement().querySelector('.lv-dist');
+      }
+      g.line.setLatLngs([[a.lat, a.lon], [b.lat, b.lon]]);
+      g.label.setLatLng(mid);
+      g.text.textContent = prefix + Math.round(d) + 'm';
+      return d;
+    }
+    /* 上下のマークの距離と、スタートラインの長さを描く。
+     * 本部船の位置は、動いている運営艇がいればその位置（ラインを合わせている最中でも見られるように）、
+     * いなければ最後に記録されたスタートの位置。 */
+    function drawGuides(now) {
+      dists.ud = drawGuide('axis', marks.m1, marks.m4, { color: '#5b6b7a', weight: 1.5, opacity: 0.8, dashArray: '4 6' }, '');
+      var cb = null;
+      Object.keys(boats).forEach(function (id) {
+        var b = boats[id];
+        if (!b.ops || !b.fixes.length || now - b.lastT > STALE_MS) return;
+        var f = b.fixes[b.fixes.length - 1];
+        cb = { lat: f[1], lon: f[2] };
+      });
+      if (!cb && startPos) cb = startPos;
+      dists.line = drawGuide('line', cb, marks.m4, { color: '#17212b', weight: 2.5, dashArray: '7 6' }, 'ライン ');
+    }
+
     /* マークと、動いている艇が収まるように地図を合わせる（回した地図でも収まるよう、画面の上・右の向きで測る） */
     function fit(force) {
       var now = Date.now(), size = map.getSize();
@@ -228,6 +271,7 @@
       var now = Date.now();
       drawMarks();
       Object.keys(boats).forEach(function (id) { drawBoat(boats[id], now); });
+      drawGuides(now);
       if (autoFit) fit(false);
       report();
     }
@@ -240,12 +284,12 @@
         n++;
         if (now - b.lastT <= STALE_MS) moving++;
       });
-      opts.onStatus({ boats: n, moving: moving, marks: Object.keys(marks).length, error: lastError, day: day });
+      opts.onStatus({ boats: n, moving: moving, marks: Object.keys(marks).length, error: lastError, day: day, ud: dists.ud, line: dists.line });
     }
 
     /* 読んだ「いまの位置」を取り込む */
     function absorb(list) {
-      var cut = Date.now() - TRAIL_MS, latest = {};
+      var cut = Date.now() - TRAIL_MS, latest = {}, lastStart = null;
       list.forEach(function (v) {
         var b = ensureBoat(v.id, v);
         var isSelf = !!opts.selfId && v.id === opts.selfId && selfFixes.length;
@@ -255,6 +299,9 @@
         }
         // マークは、種類ごとに、いちばん新しく打たれた位置を使う
         v.marks.forEach(function (m) {
+          if (m[1] === 'start' && m[2] !== null && m[3] !== null && (!lastStart || m[0] > lastStart.t)) {
+            lastStart = { lat: m[2], lon: m[3], t: m[0] };
+          }
           if (!MARK_INFO[m[1]] || m[2] === null || m[3] === null) return;
           if (!latest[m[1]] || m[0] > latest[m[1]].t) latest[m[1]] = { lat: m[2], lon: m[3], t: m[0] };
         });
@@ -269,6 +316,7 @@
         }
       });
       marks = latest;
+      startPos = lastStart;
     }
 
     function poll() {
@@ -321,7 +369,7 @@
       /* 全体が見えるように合わせ直す（指で動かしたあとに、自動の合わせ直しを再開する） */
       refit: function () { autoFit = true; map.invalidateSize(); fit(true); },
       info: function () {
-        var out = { day: day, up: Math.round(up), marks: Object.keys(marks), boats: {} };
+        var out = { day: day, up: Math.round(up), marks: Object.keys(marks), dists: dists, boats: {} };
         Object.keys(boats).forEach(function (id) { out.boats[id] = { n: boats[id].fixes.length, lastT: boats[id].lastT, nick: boats[id].nick, shown: !!boats[id].marker }; });
         return out;
       }

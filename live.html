@@ -11,6 +11,7 @@
 <header class="lv-top">
   <h1>いまの様子</h1>
   <span id="lvCount">読み込んでいます…</span>
+  <span id="lvDist"></span>
   <span id="lvClock"></span>
 </header>
 <div id="liveMap" style="position:relative"></div>
@@ -39,6 +40,10 @@
       onStatus: function (s) {
         $('lvCount').textContent = s.error ? s.error : s.boats ? '記録中 ' + s.moving + '艇（表示 ' + s.boats + '艇）' : '';
         $('lvCount').className = s.error ? 'bad' : '';
+        var d = [];
+        if (s.ud !== null) d.push('上下 ' + Math.round(s.ud) + 'm');
+        if (s.line !== null) d.push('ライン ' + Math.round(s.line) + 'm');
+        $('lvDist').textContent = d.join('・');
         $('lvEmpty').hidden = !!s.boats || !!s.error;
         if (!s.boats && !s.error) $('lvEmpty').textContent = 'いま記録中の艇はありません。記録が始まると、ここに表示されます。';
       }

@@ -367,6 +367,11 @@
       }
       return arr;
     });
+    // コースの大きさ（上下のマークの距離と、スタートラインの長さ）
+    var pr = imported && imported.practice, sizes = [];
+    if (!pr || (pr.m1 && pr.m4)) sizes.push('上マーク〜下マーク ' + Math.round(G.dist(course.marks.m1, course.marks.m4)) + 'm');
+    if (!pr) sizes.push('スタートライン ' + Math.round(G.dist(course.cb, course.marks.pin)) + 'm');
+    $('courseInfo').textContent = sizes.join('　／　');
     var seek = $('seek');
     seek.min = sim.t0; seek.max = sim.tEnd;
     // 読み込んだ航跡は、最初に全体が見えるよう最後の時刻を表示する（再生を押すと最初から流れる）
