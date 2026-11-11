@@ -1,7 +1,7 @@
 /* 計算部分の自動テスト。実行: node tools/test.js */
 'use strict';
 const path = require('path');
-['geo', 'course', 'sim', 'race', 'analysis', 'importer'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
+['geo', 'course', 'sim', 'race', 'analysis', 'importer', 'config', 'cloud'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
 const RT = globalThis.RT, G = RT.geo;
 
 let failed = 0, passed = 0;
@@ -331,5 +331,148 @@ console.log('6. 運営艇の記録からの復元');
   console.log('  5艇のレースを記録ファイル経由で再現: 回航時刻の最大のずれ ' + worst.toFixed(2) + '秒');
 }
 
-console.log('\n' + (failed ? 'NG ' + failed + ' 件 / ' : '') + 'OK ' + passed + ' 件');
-process.exit(failed ? 1 : 0);
+// ---- 7. 記録の送信（詰め方・公開する範囲・送り先とのやりとり） ----
+console.log('7. 記録の送信');
+const C = RT.cloud;
+const SQUARE = [[34.70, 135.30], [34.70, 135.35], [34.66, 135.35], [34.66, 135.30]];
+{
+  // 設定ファイルに、秘密にすべきものや実在の送り先が紛れ込んでいないこと
+  ok(Array.isArray(RT.config.area) && RT.config.area.length >= 3, '公開する範囲が設定されている');
+  ok(!/pass|secret|private|合言葉/i.test(Object.keys(RT.config.cloud).join(',')), '設定ファイルに合言葉や秘密鍵の欄がない');
+
+  RT.config.area = SQUARE;
+  ok(C.inArea(34.68, 135.32), '範囲の中');
+  ok(!C.inArea(34.72, 135.32) && !C.inArea(34.68, 135.36), '範囲の外');
+  const saved = RT.config.area;
+  RT.config.area = null;
+  ok(!C.inArea(34.68, 135.32), '範囲が未設定なら、どこも公開しない');
+  RT.config.area = saved;
+
+  // 位置の列を詰めて戻す
+  const T = 1794300000000;
+  const fixes = [];
+  let lat = 34.69, lon = 135.31, t = T;
+  for (let i = 0; i < 5000; i++) {
+    t += i % 97 === 0 ? 10432 : 1000 + (i % 7) * 3;       // ときどき10秒空く
+    lat += Math.sin(i / 40) * 0.00002; lon += Math.cos(i / 55) * 0.00003;
+    fixes.push([t, Math.round(lat * 1e6) / 1e6, Math.round(lon * 1e6) / 1e6, i % 211 === 0 ? null : 4 + (i % 9) * 1.3]);
+  }
+  const enc = C.encodeFixes(fixes), dec = C.decodeFixes(enc);
+  ok(dec.length === fixes.length, '点数が変わらない');
+  let dT = 0, dP = 0, accOk = true;
+  dec.forEach((f, i) => {
+    dT = Math.max(dT, Math.abs(f[0] - fixes[i][0]));
+    dP = Math.max(dP, Math.abs(f[1] - fixes[i][1]), Math.abs(f[2] - fixes[i][2]));
+    if (fixes[i][3] === null ? f[3] !== null : Math.abs(f[3] - fixes[i][3]) > 0.5) accOk = false;
+  });
+  ok(dT <= 50, '時刻のずれは0.05秒以内 (' + dT + 'ms)');
+  ok(dP < 1e-9, '位置は変わらない');
+  ok(accOk, '精度は1m単位で保たれる（不明は不明のまま）');
+  ok(enc.length / fixes.length < 8, '1点あたり8文字未満 (' + (enc.length / fixes.length).toFixed(1) + '文字)');
+  ok(/^[A-Za-z0-9_-]+$/.test(enc), '使う文字は英数字と - _ だけ');
+  let threw = false;
+  try { C.decodeFixes(enc.slice(0, -1) + '!'); } catch (e) { threw = true; }
+  ok(threw, '壊れた文字列は読み取りを断る');
+
+  // 範囲の外（陸の上）の位置は、送る中身に入らない
+  const land = [];
+  for (let i = 0; i < 300; i++) land.push([T - 400000 + i * 1000, 34.74 + i * 1e-5, 135.33, 8, null, null]);
+  const after = [];
+  for (let i = 0; i < 200; i++) after.push([t + 1000 + i * 1000, 34.72 + i * 1e-5, 135.36, 8, null, null]);
+  const file = {
+    format: 'yacht-track', version: 1, sail: ' 211034 ', name: 'さとう\u0007', ops: true,
+    fixes: land.concat(fixes.map(f => [f[0], f[1], f[2], f[3], 1.5, 90]), after),
+    marks: [[T + 60000, 'm1', 34.69, 135.32, 5, 100], [T + 90000, 'm4', 34.75, 135.32, 5, 100],
+      [T + 120000, 'start', 34.685, 135.32, 5, 100], [T + 130000, 'bogus', 34.685, 135.32, 5, 100]],
+    log: [[T, 'start', '']], device: 'test'
+  };
+  const packed = C.pack(file);
+  ok(packed && packed.rec.n === fixes.length, '範囲の中の点だけを送る');
+  ok(packed.outside === 500, '範囲の外だった点数を数える');
+  ok(packed.rec.first === fixes[0][0] && packed.rec.last === fixes[fixes.length - 1][0], '最初と最後の時刻は範囲の中のもの');
+  ok(packed.rec.sail === '211034' && packed.rec.nick === 'さとう', 'セール番号とニックネームは余分な空白や制御文字を除く');
+  ok(Object.keys(packed.rec).sort().join() === 'f,first,last,m,n,nick,ops,sail,v', '送るのは決めた項目だけ（端末の情報や操作の記録は送らない）');
+  const back = C.unpack(packed.rec);
+  ok(back.fixes.every(f => C.inArea(f[1], f[2])), '戻した記録に範囲の外の位置がない');
+  ok(back.marks.length === 3, '知らない種類の記録は捨てる');
+  ok(back.marks[1][2] === null && back.marks[1][3] === null, '範囲の外で打ったマークの位置は送らない');
+  const parsed = RT.importer.parse(JSON.stringify(back), 'cloud');
+  ok(parsed.ops && parsed.fixes.length === fixes.length && RT.importer.starts([parsed]).length === 1, '戻した記録を、ファイルと同じ手順で読める');
+  ok(C.pack({ sail: '1', name: 'a', fixes: land, marks: [] }) === null, '範囲の中に記録が無ければ、何も送らない');
+  ok(/^\d{4}-\d{2}-\d{2}$/.test(packed.day), '日付の形');
+  const ids = new Set();
+  for (let i = 0; i < 200; i++) ids.add(C.newId());
+  ok(ids.size === 200 && [...ids].every(id => /^[A-Za-z0-9]{12}$/.test(id)), '記録IDは重ならない英数字12文字');
+}
+
+// 模擬の送り先を立てて、登録 → 送信 → 一覧 → 読み込み を通す
+async function cloudRoundTrip() {
+  const PORT = 5199, PASS = 'umi-no-aikotoba';
+  const server = await require('./mock-cloud.js').start(PORT, PASS);
+  const base = 'http://127.0.0.1:' + PORT;
+  const stores = {};
+  function useDevice(name) {     // 端末ごとに、ブラウザの保存領域の代わりを用意する
+    const m = stores[name] = stores[name] || new Map();
+    globalThis.localStorage = { getItem: k => (m.has(k) ? m.get(k) : null), setItem: (k, v) => { m.set(k, String(v)); } };
+  }
+  const realConf = RT.config.cloud;
+  ok(!C.enabled() || !!realConf.databaseURL, '送り先が空のあいだは、送信の機能が無効');
+  RT.config.cloud = { databaseURL: base, apiKey: 'test', authURL: base, tokenURL: base };
+  RT.config.area = SQUARE;
+  try {
+    ok(C.enabled(), '送り先を設定すると有効になる');
+    const T = new Date(2026, 10, 15, 10, 0, 0).getTime();
+    const mk = (sail, nick, dx) => {
+      const fixes = [];
+      for (let i = 0; i < 600; i++) fixes.push([T + i * 1000, 34.68 + i * 2e-5, 135.32 + dx + i * 1e-5, 5, null, null]);
+      return C.pack({ sail, name: nick, fixes, marks: [] });
+    };
+
+    useDevice('A');
+    ok(!C.joined(), '最初は未登録');
+    let code = '';
+    try { await C.upload('recA', mk('1001', 'あお', 0)); } catch (e) { code = e.code; }
+    ok(code === 'passcode', '合言葉を登録していない端末は書き込めない');
+    code = '';
+    try { await C.join('chigau'); } catch (e) { code = e.code; }
+    ok(code === 'passcode' && !C.joined(), '違う合言葉は登録できない');
+    ok(await C.join(PASS) === true && C.joined(), '正しい合言葉で登録できる');
+    const up = await C.upload('recA', mk('1001', 'あお', 0));
+    ok(up.day === '2026-11-15' && up.n === 600, '記録を送れる');
+    await C.upload('recA', mk('1001', 'あお改', 0));
+    ok(true, '同じ端末は自分の記録を送り直せる');
+
+    useDevice('B');
+    await C.join(PASS);
+    code = '';
+    try { await C.upload('recA', mk('9999', 'なりすまし', 0)); } catch (e) { code = e.code; }
+    ok(code === 'passcode', '他の端末の記録は書き換えられない');
+    await C.join(PASS);
+    await C.upload('recB', mk('1002', 'あか', 0.002));
+
+    useDevice('viewer');     // 見る人は、登録も合言葉も要らない
+    const list = await C.days();
+    ok(list.length === 1 && list[0] === '2026-11-15', '日付の一覧を読める');
+    const items = await C.loadDay('2026-11-15');
+    ok(items.length === 2, 'その日の記録をすべて読める');
+    const tracks = items.map(it => RT.importer.parse(it.text, it.name)).sort((a, b) => (a.sail < b.sail ? -1 : 1));
+    ok(tracks[0].sail === '1001' && tracks[0].name === 'あお改' && tracks[1].name === 'あか', '送り直した内容が反映され、他人の書き換えは反映されない');
+    ok(tracks[0].fixes.length === 600 && Math.abs(tracks[0].fixes[599].lat - (34.68 + 599 * 2e-5)) < 1e-6, '位置がそのまま戻る');
+    ok((await C.loadDay('2026-11-16')).length === 0, '記録の無い日は空');
+    const res = await fetch(base + '/members.json');
+    ok(res.status === 401, '合言葉の登録は、外から読めない');
+    code = '';
+    RT.config.cloud = { databaseURL: 'http://127.0.0.1:1', apiKey: 'test', authURL: base, tokenURL: base };
+    try { await C.days(); } catch (e) { code = e.code; }
+    ok(code === 'net', 'つながらないときは、通信の失敗として知らせる');
+  } finally {
+    RT.config.cloud = realConf;
+    delete globalThis.localStorage;
+    server.close();
+  }
+}
+
+cloudRoundTrip().catch(e => { failed++; console.log('  NG: 送信の通しテストが止まりました: ' + (e && e.stack || e)); }).then(() => {
+  console.log('\n' + (failed ? 'NG ' + failed + ' 件 / ' : '') + 'OK ' + passed + ' 件');
+  process.exit(failed ? 1 : 0);
+});

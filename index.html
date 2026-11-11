@@ -163,6 +163,17 @@
       <div class="section">
         <h2>航跡データ</h2>
         <p class="hint" id="dataInfo"></p>
+        <div id="cloudBox" hidden>
+          <div class="row">
+            <label for="cloudDay">公開された記録</label>
+            <select id="cloudDay"></select>
+          </div>
+          <div class="btn-row">
+            <button class="btn btn-primary" id="btnCloudLoad" type="button" disabled>この日の記録を表示</button>
+            <button class="btn" id="btnCopyUrl" type="button" hidden>URLをコピー</button>
+          </div>
+          <p class="hint" id="cloudInfo">記録の一覧を読み込んでいます…</p>
+        </div>
         <input type="file" id="fileTracks" multiple accept=".json,.txt,application/json,text/plain" hidden>
         <button class="btn btn-primary" id="btnLoadTracks" type="button">航跡ファイルを読み込む</button>
         <p class="hint">スマホの記録画面で保存したファイルを選びます。複数まとめて選べます。読み込んだ航跡は、この画面を閉じると消えます（どこにも送信・保存しません）。</p>
@@ -223,6 +234,8 @@
 <script src="js/race.js"></script>
 <script src="js/analysis.js"></script>
 <script src="js/importer.js"></script>
+<script src="js/config.js"></script>
+<script src="js/cloud.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

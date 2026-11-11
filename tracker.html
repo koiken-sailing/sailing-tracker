@@ -30,16 +30,25 @@
     <label class="field">セール番号
       <input id="sail" type="text" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="例: 211034">
     </label>
-    <label class="field">名前
-      <input id="name" type="text" autocomplete="off" maxlength="12" placeholder="例: 佐藤">
+    <label class="field">ニックネーム
+      <input id="name" type="text" autocomplete="off" maxlength="12" placeholder="例: さとう">
     </label>
     <label class="check">
       <input type="checkbox" id="opsMode">
       <span>運営艇として記録する<small>マークを打った位置とスタート信号の時刻も記録します</small></span>
     </label>
+    <div id="pubBox" hidden>
+      <label class="check">
+        <input type="checkbox" id="pubMode" checked>
+        <span>観戦ページに公開する<small>記録を終了すると、海の上の航跡が、セール番号・ニックネームと一緒に、誰でも見られる観戦ページに載ります。陸の上の位置は送りません。</small></span>
+      </label>
+      <label class="field" id="passField">合言葉
+        <input id="pass" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" placeholder="部で決めた合言葉">
+      </label>
+    </div>
     <p class="err" id="setupErr" hidden></p>
     <button class="btn primary" id="btnStart" type="button">記録を開始</button>
-    <p class="note">記録はこのスマホの中にだけ保存されます。どこにも送信されません。</p>
+    <p class="note" id="setupNote">記録はこのスマホの中にだけ保存されます。どこにも送信されません。</p>
   </section>
 
   <section class="card" id="live" hidden>
@@ -77,6 +86,14 @@
   <section class="card" id="done" hidden>
     <h2>記録を終了しました</h2>
     <p id="summary"></p>
+    <div class="send" id="sendBox" hidden>
+      <p class="status" id="sendMsg" role="status"></p>
+      <label class="field" id="sendPassField" hidden>合言葉
+        <input id="sendPass" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" placeholder="部で決めた合言葉">
+      </label>
+      <button class="btn primary" id="btnSend" type="button" hidden>観戦ページに送る</button>
+      <a class="btn" id="lnkView" href="index.html" hidden>観戦ページで見る</a>
+    </div>
     <button class="btn primary" id="btnShare" type="button">ファイルを共有する</button>
     <button class="btn" id="btnSave" type="button">ファイルを保存する</button>
     <button class="btn" id="btnResume2" type="button">続きから記録する</button>
@@ -104,6 +121,8 @@
   <button id="btnUnlock" type="button">長押しで解除</button>
 </div>
 
+<script src="js/config.js"></script>
+<script src="js/cloud.js"></script>
 <script src="js/tracker.js"></script>
 </body>
 </html>

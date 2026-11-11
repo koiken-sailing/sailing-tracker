@@ -1,6 +1,8 @@
 /* スマホで航跡を記録する画面。
  *
- * 記録は端末の中（ブラウザの保存領域）にだけ置き、外部へは一切送信しない。
+ * 記録はまず端末の中（ブラウザの保存領域）に置く。
+ * 「観戦ページに公開する」を選んだ記録だけ、記録を終えたあとに送信する（js/cloud.js）。
+ * 送るのは公開してよい範囲（海の上）の位置だけで、選ばなければ外部へは一切送信しない。
  * 画面が消えると測位が止まるので、画面を点けたままにする機能（Wake Lock）を使う。
  * 途中でページが閉じても、保存済みの分から続きを記録できる。 */
 (function () {
@@ -17,6 +19,10 @@
   var HOLD_MS = 1500;      // 航海モードを解除する長押しの時間
   var MAX_LOG = 400;
   var KN = 0.514444;
+  var JOIN_WAIT_MS = 8000; // 開始時に合言葉を確かめる通信を待つ長さ（これを過ぎたら記録を先に始める）
+
+  var cloud = window.RT && window.RT.cloud;
+  var cloudOn = !!(cloud && cloud.enabled());   // 送り先が設定されているときだけ、公開の機能を出す
 
   function $(id) { return document.getElementById(id); }
   function round(v, d) { var p = Math.pow(10, d); return Math.round(v * p) / p; }
@@ -47,7 +53,9 @@
     gpsError: 0,
     dist: 0,
     storageFull: false,
-    timer: null
+    timer: null,
+    wakePending: false,
+    send: ''             // 送信の状態: ''（未送信または送信済み）/ sending / none / net / passcode / server
   };
 
   function haversine(lat1, lon1, lat2, lon2) {
@@ -107,8 +115,10 @@
 
   // ---------- 画面を点けたままにする ----------
   function acquireWake() {
-    if (!st.wakeSupported || st.wake) return;
+    if (!st.wakeSupported || st.wake || st.wakePending) return;
+    st.wakePending = true;
     navigator.wakeLock.request('screen').then(function (lock) {
+      st.wakePending = false;
       st.wake = lock;
       logEvent('wake-on');
       lock.addEventListener('release', function () {
@@ -117,7 +127,7 @@
         render();
       });
       render();
-    }).catch(function (e) { logEvent('wake-fail', e && e.name); });
+    }).catch(function (e) { st.wakePending = false; logEvent('wake-fail', e && e.name); });
   }
   function releaseWake() {
     if (st.wake) { st.wake.release().catch(function () {}); st.wake = null; }
@@ -130,6 +140,8 @@
 
   function beginRecording(resume) {
     st.meta.stopped = false;
+    st.meta.sent = null;   // 続きを記録したら、終了時にもう一度送る
+    st.send = '';
     store.set(META, st.meta);
     st.recording = true;
     st.beganAt = Date.now();
@@ -240,22 +252,52 @@
   function start() {
     var sail = $('sail').value.trim(), name = $('name').value.trim();
     var err = $('setupErr');
-    if (!sail || !name) {
-      err.textContent = 'セール番号と名前を入力してください。';
-      err.hidden = false;
-      return;
-    }
-    err.hidden = true;
+    function fail(msg) { err.textContent = msg; err.hidden = false; }
+    if (!sail || !name) { fail('セール番号とニックネームを入力してください。'); return; }
     var ops = $('opsMode').checked;
-    store.set(PROFILE, { sail: sail, name: name, ops: ops });
-    st.meta = {
-      sail: sail, name: name, started: Date.now(), chunks: 0, stopped: false, log: [],
-      ops: ops,      // 運営艇として記録しているか
-      marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
-      seq: null      // スタート手順の進行中なら、予定しているスタート時刻
-    };
-    st.fixes = []; st.saved = 0; st.dist = 0; st.storageFull = false;
-    beginRecording(false);
+    var pub = cloudOn && $('pubMode').checked;
+    var pass = $('pass').value.trim();
+    var needJoin = pub && !cloud.joined();
+    if (needJoin && !pass) { fail('合言葉を入力してください。公開しないときは、チェックを外してください。'); return; }
+    err.hidden = true;
+    store.set(PROFILE, { sail: sail, name: name, ops: ops, pub: pub });
+
+    function go() {
+      st.meta = {
+        sail: sail, name: name, started: Date.now(), chunks: 0, stopped: false, log: [],
+        ops: ops,      // 運営艇として記録しているか
+        marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
+        seq: null,     // スタート手順の進行中なら、予定しているスタート時刻
+        pub: pub,      // 記録を終えたら観戦ページに送るか
+        cid: pub ? cloud.newId() : null,   // 送るときの記録ID
+        sent: null     // 送り終えたら { day, n, outside, at }
+      };
+      // 合言葉をまだ確かめられていなければ、送るときに使えるように覚えておく
+      if (pub && !cloud.joined()) st.meta.pass = pass;
+      st.fixes = []; st.saved = 0; st.dist = 0; st.storageFull = false;
+      beginRecording(false);
+    }
+    if (!needJoin) { go(); return; }
+
+    // 合言葉は、電波のあるうちに確かめておく。違っていたら始めない。つながらなければ、記録を先に始める。
+    var btn = $('btnStart'), settled = false;
+    btn.disabled = true;
+    btn.textContent = '合言葉を確認しています…';
+    function settle(fn) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      btn.disabled = false;
+      btn.textContent = '記録を開始';
+      fn();
+    }
+    var timer = setTimeout(function () { settle(go); }, JOIN_WAIT_MS);
+    cloud.join(pass).then(function () { settle(go); }, function (e) {
+      settle(function () {
+        if (e && e.code === 'passcode') fail('合言葉が違います。もう一度確かめてください。');
+        else go();
+      });
+    });
   }
 
   function stop() {
@@ -270,6 +312,77 @@
     store.set(META, st.meta);
     leaveDark();
     showDone();
+    sendNow();
+  }
+
+  // ---------- 観戦ページへの送信 ----------
+  function sendNow() {
+    if (!cloudOn || !st.meta || !st.meta.pub || st.send === 'sending') return;
+    var packed = cloud.pack(buildFile());
+    if (!packed) { st.send = 'none'; renderSend(); return; }
+    if (!st.meta.cid) { st.meta.cid = cloud.newId(); store.set(META, st.meta); }
+    st.send = 'sending';
+    renderSend();
+    var meta = st.meta;
+    var pass = $('sendPass').value.trim() || meta.pass || '';
+    var ready = cloud.joined() ? Promise.resolve() : cloud.join(pass);
+    ready.then(function () { return cloud.upload(meta.cid, packed); }).then(function (r) {
+      if (st.meta !== meta) return;   // 送っている間に、記録が消された
+      meta.sent = { day: r.day, n: r.n, outside: packed.outside, at: Date.now() };
+      delete meta.pass;
+      store.set(META, meta);
+      st.send = '';
+      renderSend();
+    }).catch(function (e) {
+      if (st.meta !== meta) return;
+      st.send = e && e.code === 'passcode' ? 'passcode' : e && e.code === 'net' ? 'net' : 'server';
+      renderSend();
+    });
+  }
+
+  function renderSend() {
+    var on = cloudOn && !!st.meta && !!st.meta.pub;
+    $('sendBox').hidden = !on;
+    if (!on) return;
+    var sent = st.meta.sent, text, cls = '', retry = false, askPass = false;
+    if (st.send === 'sending') text = '観戦ページに送っています…';
+    else if (st.send === 'none') text = '公開する範囲（海の上）での記録が無かったので、送っていません。';
+    else if (st.send === 'net') {
+      text = '電波が届かず、送れませんでした。つながる場所で、下のボタンを押してください。';
+      cls = 'bad'; retry = true;
+    } else if (st.send === 'passcode') {
+      text = '合言葉が違うか、まだ登録されていません。合言葉を入れて、下のボタンを押してください。';
+      cls = 'bad'; retry = true; askPass = true;
+    } else if (st.send === 'server') {
+      text = '送り先でエラーが起きました。少し待ってから、下のボタンを押してください。';
+      cls = 'bad'; retry = true;
+    } else if (sent) {
+      text = '観戦ページに送りました（' + sent.n + '点）。' +
+        (sent.outside ? '範囲の外だった' + sent.outside + '点は送っていません。' : '');
+      cls = 'good';
+    } else {
+      text = 'まだ観戦ページに送っていません。';
+      retry = true;
+    }
+    var msg = $('sendMsg');
+    msg.textContent = text;
+    msg.className = 'status' + (cls ? ' ' + cls : '');
+    $('btnSend').hidden = !retry;
+    $('sendPassField').hidden = !askPass;
+    var ok = !!sent && st.send === '';
+    $('lnkView').hidden = !ok;
+    if (ok) $('lnkView').href = 'index.html?day=' + encodeURIComponent(sent.day);
+  }
+
+  /* 最初の画面の、公開まわりの表示をいまの状態に合わせる */
+  function renderSetup() {
+    $('pubBox').hidden = !cloudOn;
+    if (!cloudOn) return;
+    var pub = $('pubMode').checked;
+    $('passField').hidden = !pub || cloud.joined();
+    $('setupNote').textContent = pub ?
+      '記録はまずこのスマホの中に保存され、記録を終了したときに観戦ページへ送られます。' :
+      '記録はこのスマホの中にだけ保存されます。どこにも送信されません。';
   }
 
   function showDone() {
@@ -280,6 +393,7 @@
     $('btnShare').hidden = !shareFile();
     $('btnShare').disabled = n === 0;
     $('btnSave').disabled = n === 0;
+    renderSend();
     showScreen('done');
   }
 
@@ -287,6 +401,9 @@
     if (st.meta) for (var i = 0; i < st.meta.chunks; i++) store.del(CHUNK + i);
     store.del(META);
     st.meta = null; st.fixes = []; st.saved = 0; st.dist = 0; st.storageFull = false;
+    st.send = '';
+    $('sendPass').value = '';
+    renderSetup();
     showScreen('setup');
   }
 
@@ -472,7 +589,12 @@
 
   function init() {
     var prof = store.get(PROFILE);
-    if (prof) { $('sail').value = prof.sail || ''; $('name').value = prof.name || ''; $('opsMode').checked = !!prof.ops; }
+    if (prof) {
+      $('sail').value = prof.sail || ''; $('name').value = prof.name || ''; $('opsMode').checked = !!prof.ops;
+      if (prof.pub === false) $('pubMode').checked = false;
+    }
+    $('pubMode').addEventListener('change', renderSetup);
+    renderSetup();
 
     var problem = '';
     if (!window.isSecureContext) problem = 'このページは https:// で始まるアドレスで開く必要があります。';
@@ -492,7 +614,15 @@
       st.meta.stopped = true;
       store.set(META, st.meta);
       showDone();
+      sendNow();
     });
+    $('btnSend').addEventListener('click', sendNow);
+    // 電波が戻ったら、送れなかった記録を送り直す
+    window.addEventListener('online', function () {
+      if (st.meta && st.meta.stopped && !st.meta.sent && st.send === 'net') sendNow();
+    });
+    // 画面を点けたままにする機能が働いていなければ、次に画面に触れたときにもう一度頼む
+    document.addEventListener('pointerdown', function () { if (st.recording && !st.wake) acquireWake(); });
     $('btnDark').addEventListener('click', enterDark);
     $('btnShare').addEventListener('click', share);
     $('btnSave').addEventListener('click', download);
@@ -511,6 +641,7 @@
     if (loadSaved()) {
       if (st.meta.stopped) {
         showDone();
+        if (!st.meta.sent) sendNow();   // 前回送れなかった記録を送る
       } else {
         $('resumeMsg').textContent = st.meta.sail + '　' + st.meta.name + ' の記録が ' + st.fixes.length +
           '点あります。記録中にページが閉じられたようです。';
@@ -524,5 +655,5 @@
   init();
 
   // 動作確認用
-  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase };
+  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase, sendNow: sendNow };
 })();

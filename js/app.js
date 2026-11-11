@@ -877,8 +877,9 @@
   // ---------- 航跡ファイルの読み込み ----------
   var importSerial = 0;
 
-  /* items = [{ name: ファイル名, text: 中身 }]。読めたファイルだけを使う。 */
-  function importTexts(items) {
+  /* items = [{ name: ファイル名, text: 中身 }]。読めたファイルだけを使う。
+   * 公開された記録を読んだときは、opts.day にその日付（例 2026-11-15）を渡す。 */
+  function importTexts(items, opts) {
     var tracks = [], errors = [];
     items.forEach(function (it) {
       try { tracks.push(RT.importer.parse(it.text, it.name)); }
@@ -891,7 +892,8 @@
     var next = {
       tracks: tracks,
       startMs: Math.floor(first / 1000) * 1000,   // とりあえず記録の先頭をスタート時刻にしておく
-      relocate: null, overrides: {}, serial: ++importSerial
+      relocate: null, overrides: {}, serial: ++importSerial,
+      day: (opts && opts.day) || null    // 公開された記録なら、その日付
     };
     // 運営艇の記録は順位表に入れない（運営艇の記録しか無いときは、それを表示する）
     next.racers = tracks.filter(function (tr) { return !tr.ops; });
@@ -925,6 +927,7 @@
     fillInputs();
     renderData();
     fitCourse();
+    syncUrl();
     toast(tracks.length + '件の航跡を読み込みました。' +
       (next.fromOps ? '運営艇の記録からコースを設定しました。' : '') +
       (errors.length ? '読めなかったファイルが' + errors.length + '件あります。' : ''));
@@ -938,6 +941,7 @@
     fillInputs();
     renderData();
     fitCourse();
+    syncUrl();
   }
 
   /* 1日に複数レースある記録で、見るレースを切り替える */
@@ -953,15 +957,106 @@
     fillInputs();
     renderData();
     fitCourse();
+    syncUrl();
+  }
+
+  // ---------- 公開された記録（js/cloud.js）の読み込み ----------
+  var cloud = RT.cloud, cloudOn = !!(cloud && cloud.enabled());
+  var cloudBusy = false;
+  var DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  function dayLabel(day) {
+    var p = day.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]);
+    return +p[0] + '年' + +p[1] + '月' + +p[2] + '日（' + '日月火水木金土'.charAt(d.getDay()) + '）';
+  }
+
+  /* アドレス欄を、いま見ている日付とレースに合わせる。そのままコピーして人に渡せるようにするため。 */
+  function syncUrl() {
+    if (!window.history || !history.replaceState) return;
+    var q = '';
+    if (imported && imported.day) {
+      q = '?day=' + imported.day;
+      var r = imported.starts.indexOf(imported.startMs);
+      if (r > 0) q += '&race=' + (r + 1);
+    }
+    try { history.replaceState(null, '', location.pathname + q); } catch (e) { /* 変えられなくても続ける */ }
+  }
+
+  function fillCloudDays(list, pick) {
+    var sel = $('cloudDay');
+    sel.textContent = '';
+    list.forEach(function (day) {
+      var opt = el('option', null, dayLabel(day));
+      opt.value = day;
+      sel.appendChild(opt);
+    });
+    if (pick && list.indexOf(pick) >= 0) sel.value = pick;
+    $('btnCloudLoad').disabled = !list.length;
+    $('cloudInfo').textContent = list.length ?
+      '記録ページで「観戦ページに公開する」を選んだ記録が、日付ごとに並びます。' : 'まだ公開された記録がありません。';
+  }
+
+  /* ある日の公開された記録を読み込んで表示する。race は見たいレースの番号（1から。0なら最初）。 */
+  function loadCloudDay(day, race) {
+    if (cloudBusy) return;
+    cloudBusy = true;
+    $('btnCloudLoad').disabled = true;
+    toast('記録を読み込んでいます…');
+    cloud.loadDay(day).then(function (items) {
+      if (!items.length) { toast(dayLabel(day) + 'の記録はありません。'); return; }
+      if (!importTexts(items, { day: day })) return;
+      if (race > 1 && imported.starts[race - 1] !== undefined) chooseRace(race - 1);
+      if ($('cloudDay').querySelector('option[value="' + day + '"]')) $('cloudDay').value = day;
+    }).catch(function (e) {
+      toast(e && e.code === 'net' ? '通信できませんでした。電波のある場所で、もう一度試してください。' : '記録を読み込めませんでした。');
+    }).then(function () {
+      cloudBusy = false;
+      $('btnCloudLoad').disabled = !$('cloudDay').options.length;
+    });
+  }
+
+  function initCloud() {
+    $('cloudBox').hidden = !cloudOn;
+    if (!cloudOn) return;
+    // アドレスに ?day=2026-11-15（または ?day=latest）が付いていたら、その日の記録を最初から表示する
+    var want = null, race = 0;
+    try {
+      var q = new URLSearchParams(location.search);
+      want = q.get('day');
+      race = parseInt(q.get('race'), 10) || 0;
+    } catch (e) { /* 読めなければ、ふつうに開く */ }
+    $('btnCloudLoad').addEventListener('click', function () {
+      var day = $('cloudDay').value;
+      if (DAY_RE.test(day)) loadCloudDay(day, 0);
+    });
+    $('btnCopyUrl').addEventListener('click', function () {
+      var url = location.href;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(url).then(function () { toast('URLをコピーしました。'); },
+          function () { toast('コピーできませんでした。アドレス欄からコピーしてください。'); });
+      } else {
+        toast('アドレス欄のURLをコピーしてください。');
+      }
+    });
+    cloud.days().then(function (list) {
+      if (want === 'latest') want = list[0] || null;
+      fillCloudDays(list, want);
+      if (want && DAY_RE.test(want)) loadCloudDay(want, race);
+    }).catch(function () {
+      $('cloudInfo').textContent = '記録の一覧を読めませんでした。電波のある場所で、ページを開き直してください。';
+      if (want && DAY_RE.test(want)) loadCloudDay(want, race);
+    });
   }
 
   /* 選手タブの「航跡データ」欄。いま何を表示しているかと、読み込んだ航跡の一覧。 */
   function renderData() {
     var on = !!imported;
-    $('modeBadge').textContent = on ? '読み込んだ航跡' : '試作・シミュレーション';
+    $('modeBadge').textContent = !on ? '試作・シミュレーション' : imported.day ? dayLabel(imported.day) + 'の記録' : '読み込んだ航跡';
+    $('btnCopyUrl').hidden = !(on && imported.day);
     $('importBox').hidden = !on;
     $('crewSection').hidden = on;
     $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
+      (imported.day ? dayLabel(imported.day) + 'の公開された記録です。' : '') +
       imported.racers.length + '艇の航跡を表示しています。' +
       (imported.fromOps ? '運営艇の記録から、コースとスタート時刻を設定しました。保存してあるコースは変わりません。' :
         imported.relocate ? 'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
@@ -1173,6 +1268,7 @@
   map.setView([state.params.lat, state.params.lon], 15);
   rebuild(false);
   fitCourse();
+  initCloud();
   requestAnimationFrame(frame);
 
   // 動作確認用

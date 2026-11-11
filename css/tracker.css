@@ -105,6 +105,11 @@ body {
 .countdown b { display: block; font-size: 40px; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .countdown span { display: block; font-size: 14px; color: #b9c8da; }
 
+/* 観戦ページへの送信 */
+.send { margin: 0 0 14px; padding: 12px 14px 2px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+.send .status { margin-bottom: 12px; }
+a.btn { display: flex; align-items: center; justify-content: center; text-decoration: none; text-align: center; }
+
 .tips ul { margin: 0; padding-left: 1.2em; font-size: 14px; color: var(--muted); }
 .tips li { margin-bottom: 6px; }
 
