@@ -15,17 +15,23 @@
   var REFIT_MS = 30 * 1000;        // 少なくともこの間隔で、全体が見えるように合わせ直す
   var KN = 0.514444;
   var COLORS = ['#e6194b', '#2e9e44', '#4363d8', '#f58231', '#911eb4', '#008080',
-    '#e032c8', '#9a6324', '#800000', '#000075', '#6b7a00', '#c79200'];
+    '#e032c8', '#9a6324', '#800000', '#000075', '#6b7a00', '#c79200',
+    '#1ba3d6', '#7cb518', '#f06292', '#546e7a', '#7e57c2', '#ff7043',
+    '#00a878', '#ad1457', '#3949ab', '#8d6e00', '#00838f', '#757575'];
   var MARK_INFO = { m1: ['上', '上マーク'], m4: ['下', '下マーク'], fin: ['F', 'フィニッシュ'] };
-  var LEAFLET_CSS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
-  var LEAFLET_JS = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+  // 地図の部品（Leaflet）は、このサイトに置いたものを使う。
+  // 地図を回す部品だけは配布元から読み込み、中身が変わっていないことを照合値（integrity）で確かめる。
+  var LEAFLET_CSS = 'vendor/leaflet-1.9.4/leaflet.min.css';
+  var LEAFLET_JS = 'vendor/leaflet-1.9.4/leaflet.min.js';
   var ROTATE_JS = 'https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js';
+  var ROTATE_SRI = 'sha384-MtIdllebpZyms2pw9K3YJl8BEqrKNQCdSFAySjeglab6z2PkeFdF4Lb9cDsnxQuG';
 
   // ---------- 地図の部品の読み込み ----------
   var loading = null;
-  function addScript(src) {
+  function addScript(src, integrity) {
     return new Promise(function (resolve, reject) {
       var s = document.createElement('script');
+      if (integrity) { s.integrity = integrity; s.crossOrigin = 'anonymous'; }
       s.src = src;
       s.onload = resolve;
       s.onerror = function () { reject(new Error('地図の部品を読み込めませんでした')); };
@@ -39,7 +45,7 @@
     link.rel = 'stylesheet';
     link.href = LEAFLET_CSS;
     document.head.appendChild(link);
-    loading = addScript(LEAFLET_JS).then(function () { return addScript(ROTATE_JS); })
+    loading = addScript(LEAFLET_JS).then(function () { return addScript(ROTATE_JS, ROTATE_SRI); })
       .catch(function (e) { loading = null; throw e; });
     return loading;
   }

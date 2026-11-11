@@ -13,6 +13,7 @@
   <span id="lvCount">読み込んでいます…</span>
   <span id="lvDist"></span>
   <span id="lvClock"></span>
+  <span data-version></span>
 </header>
 <div id="liveMap" style="position:relative"></div>
 <div class="lv-empty" id="lvEmpty" hidden></div>
@@ -21,10 +22,12 @@
   <a href="index.html?day=latest">終わった記録を見る</a>
 </footer>
 
+<script src="js/version.js"></script>
 <script src="js/geo.js"></script>
 <script src="js/config.js"></script>
 <script src="js/cloud.js"></script>
 <script src="js/livemap.js"></script>
+<script src="js/boot.js"></script>
 <script>
 /* 岸から見る、リアルタイムの画面。記録中の艇の位置を5秒おきに読んで表示する。合言葉は要らない。 */
 (function () {

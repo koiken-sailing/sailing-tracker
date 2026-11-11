@@ -6,7 +6,9 @@
   var STORE_OLD = 'yacht-tracker-proto-v1';
   var SIM_BOATS = 12;      // シミュレーションの艇数
   var COLORS = ['#e6194b', '#2e9e44', '#4363d8', '#f58231', '#911eb4', '#008080',
-    '#e032c8', '#9a6324', '#800000', '#000075', '#6b7a00', '#c79200'];
+    '#e032c8', '#9a6324', '#800000', '#000075', '#6b7a00', '#c79200',
+    '#1ba3d6', '#7cb518', '#f06292', '#546e7a', '#7e57c2', '#ff7043',
+    '#00a878', '#ad1457', '#3949ab', '#8d6e00', '#00838f', '#757575'];
   function color(i) { return COLORS[i % COLORS.length]; }
   var NAMES = ['佐藤', '鈴木', '高橋', '田中', '伊藤', '渡辺', '山本', '中村', '小林', '加藤', '吉田', '山田'];
   var SAILS = ['211034', '208517', '214460', '199823', '216002', '205371',
@@ -327,9 +329,12 @@
     markers.forEach(function (m, k) {
       var on = isSel(k);
       m.boat.classList.toggle('is-selected', on);
+      // 「選んだ艇だけを表示する」のときは、選んでいない艇を地図から消す（艇が多い日に見やすくするため）
+      var hide = any && state.onlySel && !on;
       m.boat.classList.toggle('is-dim', any && !on);
+      m.boat.classList.toggle('is-hidden', hide);
       m.marker.setZIndexOffset(on ? 2000 : 1000);
-      trails[k].setStyle({ weight: on ? 3.5 : any ? 1.5 : 2, opacity: on ? 1 : any ? 0.2 : 0.85 });
+      trails[k].setStyle({ weight: on ? 3.5 : any ? 1.5 : 2, opacity: hide ? 0 : on ? 1 : any ? 0.2 : 0.85 });
     });
     state.selected.forEach(function (k) { trails[k].bringToFront(); });
     $('btnClearSel').hidden = !any;
@@ -661,7 +666,8 @@
     if (isStart) {
       var bias = RT.analysis.lineBias(course);
       info.textContent = 'ラインの有利不利: ' + (Math.abs(bias) < 1 ? 'ほぼなし' :
-        (bias > 0 ? '下マーク側' : '本部船側') + 'が約' + Math.abs(bias).toFixed(0) + 'm 風上で有利');
+        (bias > 0 ? '下マーク側' : '本部船側') + 'が約' + Math.abs(bias).toFixed(0) + 'm 風上で有利') +
+        (imported ? '。スタートの時刻は、スマホの時計のずれで1秒ほど違うことがあります。ラインの端は、運営艇のスマホの位置と下マークを打った位置です。目安として見てください。' : '');
     }
   }
 
@@ -1055,11 +1061,13 @@
     try { history.replaceState(null, '', location.pathname + q); } catch (e) { /* 変えられなくても続ける */ }
   }
 
+  var cloudTitles = {};   // 日付ごとの名前（「部内レース」など）
+  function dayName(day) { return dayLabel(day) + (cloudTitles[day] ? '　' + cloudTitles[day] : ''); }
   function fillCloudDays(list, pick) {
     var sel = $('cloudDay');
     sel.textContent = '';
     list.forEach(function (day) {
-      var opt = el('option', null, dayLabel(day));
+      var opt = el('option', null, dayName(day));
       opt.value = day;
       sel.appendChild(opt);
     });
@@ -1114,7 +1122,10 @@
         toast('アドレス欄のURLをコピーしてください。');
       }
     });
-    cloud.days().then(function (list) {
+    // 日付の名前は、読めなくても一覧は出す
+    var named = cloud.titles().then(function (t) { cloudTitles = t; }, function () { cloudTitles = {}; });
+    Promise.all([cloud.days(), named]).then(function (res) {
+      var list = res[0];
       if (want === 'latest') want = list[0] || null;
       fillCloudDays(list, want);
       if (want && DAY_RE.test(want)) loadCloudDay(want, race, session);
@@ -1127,12 +1138,12 @@
   /* 選手タブの「航跡データ」欄。いま何を表示しているかと、読み込んだ航跡の一覧。 */
   function renderData() {
     var on = !!imported;
-    $('modeBadge').textContent = !on ? '試作・シミュレーション' : imported.day ? dayLabel(imported.day) + 'の記録' : '読み込んだ航跡';
+    $('modeBadge').textContent = !on ? '試作・シミュレーション' : imported.day ? dayName(imported.day) : '読み込んだ航跡';
     $('btnCopyUrl').hidden = !(on && imported.day);
     $('importBox').hidden = !on;
     $('crewSection').hidden = on;
     $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
-      (imported.day ? dayLabel(imported.day) + 'の公開された記録です。' : '') +
+      (imported.day ? dayName(imported.day) + ' の公開された記録です。' : '') +
       imported.racers.length + '艇の航跡を表示しています。' +
       (imported.practice ? 'マーク練習の記録です。打ったマークの位置を表示しています。順位やスタートの判定はしません。' +
         (imported.sessions && imported.sessions.length > 1 ? 'マークを打ち直すたびにセッションを分けています（全' + imported.sessions.length + 'セッション）。' : '') :
@@ -1300,6 +1311,7 @@
     $('optTail').value = state.tail;
     $('optTail').addEventListener('change', function () { state.tail = this.value; save(); dirty = true; });
     $('btnClearSel').addEventListener('click', clearSelection);
+    $('optOnlySel').addEventListener('change', function () { state.onlySel = this.checked; applySelection(); });
     // 順位表と分析表: 行をクリックしたら、その艇の選択を切り替える
     ['board', 'anaTable'].forEach(function (id) {
       $(id).querySelector('tbody').addEventListener('click', function (e) {

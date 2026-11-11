@@ -12,7 +12,7 @@
 <main id="app">
   <header class="head">
     <h1>航跡の記録</h1>
-    <p>ヨットレース トラッカー（試作）</p>
+    <p>ヨットレース トラッカー（試作）　<span data-version></span></p>
   </header>
 
   <section class="card warn" id="blocked" hidden>
@@ -54,6 +54,9 @@
         <input type="checkbox" id="pubMode" checked>
         <span>観戦ページに公開する<small>海の上の位置と航跡が、セール番号・ニックネームと一緒に、誰でも見られる観戦ページに載ります。記録中は5秒ごとにいまの位置を送り、記録を終了すると全体を送ります。陸の上の位置は送りません。</small></span>
       </label>
+      <label class="field" id="titleField" hidden>今日の名前（任意）
+        <input id="dayTitle" type="text" autocomplete="off" maxlength="30" placeholder="例: 部内レース">
+      </label>
       <label class="field" id="passField">合言葉
         <input id="pass" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" placeholder="部で決めた合言葉">
       </label>
@@ -75,6 +78,12 @@
     <p class="status" id="vStatus" role="status"></p>
 
     <div class="ops" id="opsPanel" hidden>
+      <div class="ops-tabs" id="opsTabs" role="tablist">
+        <button type="button" class="ops-tab is-on" data-pane="marks" role="tab" aria-selected="true">マーク</button>
+        <button type="button" class="ops-tab" data-pane="navi" role="tab" aria-selected="false">ナビ</button>
+        <button type="button" class="ops-tab" data-pane="start" role="tab" aria-selected="false" id="opsTabStart">スタート</button>
+      </div>
+      <div data-ops-pane="marks">
       <h2>マークの位置</h2>
       <p class="note">マークを打った場所で押してください。1回目で位置を覚え、2回目で確定します。打ち直したときは、もう一度押せば新しい位置に置き換わります。</p>
       <button class="btn" id="btnM1" type="button">上マークを打った</button>
@@ -82,6 +91,9 @@
       <button class="btn" id="btnFin" type="button">フィニッシュマークを打った</button>
       <ul class="ops-list" id="opsMarks"></ul>
       <p class="ops-dist" id="opsDist" hidden></p>
+      <p class="note" id="sessionNote" hidden>同じマークを3分以上あけて打ち直すと、観戦ページでは別のセッションに分かれます。</p>
+      </div>
+      <div data-ops-pane="navi" hidden>
       <div class="plan" id="planBox">
         <h2>コース設定ナビ</h2>
         <p class="note">上マークか下マークのどちらかを打ったあと、風軸と距離を入れると、残りのマークを打つ位置（目標）と、そこまでの距離が出ます。</p>
@@ -95,8 +107,9 @@
         <p class="ops-dist" id="planInfo" hidden></p>
         <button class="btn primary" id="btnNav" type="button">地図でナビを見る</button>
       </div>
-      <p class="note" id="sessionNote" hidden>同じマークを3分以上あけて打ち直すと、観戦ページでは別のセッションに分かれます。</p>
+      </div>
 
+      <div data-ops-pane="start" hidden>
       <div id="opsStartBox">
       <h2>スタート</h2>
       <label class="pick">周回数
@@ -114,6 +127,7 @@
       <ul class="ops-list" id="opsStarts"></ul>
       <p class="note">スタート信号の瞬間の、このスマホの位置を本部船の位置として記録します。周回数も、そのスタートと一緒に記録します。</p>
       <p class="note">スタート手順では、4分前・1分前・スタートの瞬間に長い音が鳴ります。それぞれの5秒前から、短い音で予告します。スマホの音量を上げておいてください。</p>
+      </div>
       </div>
     </div>
 
@@ -134,6 +148,7 @@
       </label>
       <button class="btn primary" id="btnSend" type="button" hidden>観戦ページに送る</button>
       <a class="btn" id="lnkView" href="index.html" hidden>観戦ページで見る</a>
+      <button class="btn quiet" id="btnUnpub" type="button" hidden>観戦ページから取り消す</button>
     </div>
     <button class="btn primary" id="btnShare" type="button">ファイルを共有する</button>
     <button class="btn" id="btnSave" type="button">ファイルを保存する</button>
@@ -191,11 +206,13 @@
   <button id="btnUnlock" type="button">長押しで解除</button>
 </div>
 
+<script src="js/version.js"></script>
 <script src="js/geo.js"></script>
 <script src="js/plan.js"></script>
 <script src="js/config.js"></script>
 <script src="js/cloud.js"></script>
 <script src="js/livemap.js"></script>
 <script src="js/tracker.js"></script>
+<script src="js/boot.js"></script>
 </body>
 </html>

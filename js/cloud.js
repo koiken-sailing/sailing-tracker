@@ -284,6 +284,47 @@
     });
   }
 
+  /* 自分が送った記録を、観戦ページから取り消す（航跡 → 一覧の順に消す）。他人の記録は消せない。 */
+  function remove(id, day) {
+    return ensureAuth().then(function (s) {
+      var q = 'auth=' + encodeURIComponent(s.id);
+      function check(r) {
+        if (r.status === 401 || r.status === 403) throw fail('denied', 'この記録は取り消せません');
+        if (r.status !== 200) throw fail('server', '送り先でエラーが起きました');
+      }
+      return http('DELETE', dbUrl('tracks/' + day + '/' + id, q)).then(function (r) {
+        check(r);
+        return http('DELETE', dbUrl('days/' + day + '/' + id, q));
+      }).then(function (r) { check(r); return true; });
+    });
+  }
+
+  /* その日に名前を付ける（「部内レース」など）。合言葉を登録した端末だけ。あとから付けた名前で置き換わる。 */
+  function setTitle(day, title) {
+    title = clean(title, 30);
+    if (!title) return Promise.resolve(false);
+    return ensureAuth().then(function (s) {
+      return http('PUT', dbUrl('titles/' + day, 'auth=' + encodeURIComponent(s.id)), title).then(function (r) {
+        if (r.status === 401 || r.status === 403) throw fail('denied', '名前を付けられません');
+        if (r.status !== 200) throw fail('server', '送り先でエラーが起きました');
+        return true;
+      });
+    });
+  }
+
+  /* 日付ごとの名前を読む。戻り値は { '2026-11-15': '部内レース' } の形。合言葉は要らない。 */
+  function titles() {
+    return http('GET', dbUrl('titles')).then(function (r) {
+      if (r.status !== 200) throw fail('server', '名前を読めませんでした');
+      var out = {};
+      Object.keys(r.data || {}).forEach(function (day) {
+        var t = clean(r.data[day], 30);
+        if (/^\d{4}-\d{2}-\d{2}$/.test(day) && t) out[day] = t;
+      });
+      return out;
+    });
+  }
+
   /* 記録のある日付の一覧（新しい順） */
   function days() {
     return http('GET', dbUrl('days', 'shallow=true')).then(function (r) {
@@ -413,6 +454,7 @@
     encodeFixes: encodeFixes, decodeFixes: decodeFixes, pack: pack, unpack: unpack,
     dayOf: dayOf, newId: newId,
     joined: joined, join: join, upload: upload, days: days, loadDay: loadDay,
+    remove: remove, setTitle: setTitle, titles: titles,
     LIVE_TAIL_MS: LIVE_TAIL_MS, livePick: livePick, liveNow: liveNow, liveChunk: liveChunk,
     liveEnd: liveEnd, liveRead: liveRead, liveTrail: liveTrail
   };

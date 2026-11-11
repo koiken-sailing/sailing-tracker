@@ -38,11 +38,19 @@
       }
     },
 
+    "titles": {
+      ".read": true,
+      "$day": {
+        ".write": "auth != null && root.child('members').child(auth.uid).exists()",
+        ".validate": "$day.matches(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) && newData.isString() && newData.val().length <= 30"
+      }
+    },
+
     "days": {
       ".read": true,
       "$day": {
         "$id": {
-          ".write": "auth != null && root.child('members').child(auth.uid).exists() && (!data.exists() || data.child('uid').val() === auth.uid) && newData.child('uid').val() === auth.uid",
+          ".write": "auth != null && root.child('members').child(auth.uid).exists() && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
           ".validate": "$day.matches(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) && $id.length <= 24 && newData.hasChildren(['uid', 'sail', 'nick', 'ops', 'first', 'last', 'n'])",
           "uid": { ".validate": "newData.isString()" },
           "sail": { ".validate": "newData.isString() && newData.val().length <= 12" },
@@ -60,7 +68,7 @@
       "$day": {
         ".read": true,
         "$id": {
-          ".write": "auth != null && root.child('members').child(auth.uid).exists() && (!data.exists() || data.child('uid').val() === auth.uid) && newData.child('uid').val() === auth.uid",
+          ".write": "auth != null && root.child('members').child(auth.uid).exists() && (!data.exists() || data.child('uid').val() === auth.uid) && (!newData.exists() || newData.child('uid').val() === auth.uid)",
           ".validate": "$day.matches(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) && $id.length <= 24 && newData.hasChildren(['v', 'uid', 'sail', 'nick', 'ops', 'first', 'last', 'n', 'f', 'm'])",
           "v": { ".validate": "newData.isNumber()" },
           "uid": { ".validate": "newData.isString()" },

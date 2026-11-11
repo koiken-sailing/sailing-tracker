@@ -111,6 +111,12 @@ body {
 .modes .check { margin-bottom: 12px; }
 .landnote { padding: 10px 12px; border: 1px solid var(--warn-line); border-radius: 8px; background: var(--warn-bg); font-size: 14px; }
 
+/* 運営艇・マーク練習の画面の切り替え（マーク / ナビ / スタート） */
+.ops-tabs { display: flex; gap: 6px; margin: 0 0 12px; }
+.ops-tab { flex: 1; min-height: 48px; padding: 6px 4px; border: 1px solid #c5ced8; border-radius: 10px; background: #fff; font: inherit; font-weight: 700; color: var(--ink); font-variant-numeric: tabular-nums; }
+.ops-tab.is-on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.ops-tab.is-live { border-color: var(--accent); }
+
 /* コース設定ナビ */
 .plan { margin: 0 0 14px; padding: 12px 12px 2px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
 .plan h2 { margin: 0 0 6px; }

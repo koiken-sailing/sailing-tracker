@@ -10,7 +10,7 @@
 const http = require('http');
 
 function start(port, passcode) {
-  const db = { members: {}, days: {}, tracks: {}, live: {}, liveTrail: {} };
+  const db = { members: {}, days: {}, tracks: {}, live: {}, liveTrail: {}, titles: {} };
   let seq = 0;
 
   function send(res, status, body) {
@@ -87,6 +87,23 @@ function start(port, passcode) {
       }
       if (parts[0] === 'tracks' && parts.length === 3 && req.method === 'PUT') {
         return writeRecord('tracks', parts[1], parts[2], uid, body, ['v', 'uid', 'sail', 'nick', 'first', 'last', 'n', 'f', 'm']) ? send(res, 200, body) : denied(res);
+      }
+      // ---- 自分の記録の取り消し ----
+      if ((parts[0] === 'days' || parts[0] === 'tracks') && parts.length === 3 && req.method === 'DELETE') {
+        const table = db[parts[0]], old = table[parts[1]] && table[parts[1]][parts[2]];
+        if (!uid || !db.members[uid] || (old && old.uid !== uid)) return denied(res);
+        if (old) delete table[parts[1]][parts[2]];
+        if (table[parts[1]] && !Object.keys(table[parts[1]]).length) delete table[parts[1]];
+        return send(res, 200, null);
+      }
+      // ---- 日付の名前 ----
+      if (parts[0] === 'titles' && parts.length === 1 && req.method === 'GET') {
+        return send(res, 200, Object.keys(db.titles).length ? db.titles : null);
+      }
+      if (parts[0] === 'titles' && parts.length === 2 && req.method === 'PUT') {
+        if (!uid || !db.members[uid] || !/^\d{4}-\d{2}-\d{2}$/.test(parts[1]) || typeof body !== 'string' || body.length > 30) return denied(res);
+        db.titles[parts[1]] = body;
+        return send(res, 200, body);
       }
       // ---- リアルタイム ----
       const dayOk = d => /^\d{4}-\d{2}-\d{2}$/.test(d);

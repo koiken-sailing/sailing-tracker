@@ -257,6 +257,7 @@ input[type="datetime-local"] {
 .boat.is-selected .boat-label { background: var(--navy); color: #fff; }
 .boat.is-selected svg { transform-origin: 50% 50%; scale: 1.25; }
 .boat.is-dim { opacity: .4; }
+.boat.is-hidden { visibility: hidden; }
 
 .mark { position: relative; width: 20px; height: 20px; }
 .mark-dot {

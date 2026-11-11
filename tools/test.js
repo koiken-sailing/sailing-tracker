@@ -655,6 +655,40 @@ console.log('11. コース設定ナビの計算');
   near(G.dist(c4.targets.find(t => t.key === 'm4'), c4.targets.find(t => t.key === 'cb')), 80, 0.01, '下マークがまだでも、本部船の目標は下マークの目標から測る');
 }
 
+// ---- 12. 圏外でも開けるように保存するファイルの一覧（sw.js）と、外部から読み込む部品 ----
+console.log('12. オフライン対応と外部の部品');
+{
+  const fs = require('fs');
+  const rootDir = path.join(__dirname, '..');
+  const read = f => fs.readFileSync(path.join(rootDir, f), 'utf8');
+  const sw = read('sw.js');
+  const list = sw.slice(sw.indexOf('var FILES = ['), sw.indexOf('];', sw.indexOf('var FILES = [')));
+  const files = (list.match(/'[^']+'/g) || []).map(s => s.slice(1, -1));
+  ok(files.length > 15 && files.includes('./') && files.includes('tracker.html'), '保存するファイルの一覧を読み取れる (' + files.length + '件)');
+  files.filter(f => f !== './').forEach(f => ok(fs.existsSync(path.join(rootDir, f)), '一覧にあるファイルが実在する: ' + f));
+  ok(new Set(files).size === files.length, '一覧に重複がない');
+  require(path.join(rootDir, 'js', 'version.js'));
+  ok(/^\d{4}\.\d{2}\.\d{2}[a-z]$/.test(RT.version), '版の書き方（例 2026.11.12a）: ' + RT.version);
+  ok(sw.includes("importScripts('js/version.js')") && sw.includes("'yt-app-' + self.RT.version"), '保存する分は、版ごとに入れ替わる');
+  ['index.html', 'tracker.html', 'live.html'].forEach(page => {
+    const html = read(page);
+    const refs = [...html.matchAll(/(?:src|href)="([^"#]+)"/g)].map(m => m[1].split('?')[0]);
+    const local = refs.filter(r => !/^https?:/.test(r) && /\.(js|css)$/.test(r));
+    local.forEach(r => ok(files.includes(r), page + ' が使う ' + r + ' は、圏外用に保存される'));
+    ok(local.includes('js/version.js') && local.includes('js/boot.js'), page + ' は版の表示とオフラインの準備を読み込む');
+    ok(/data-version/.test(html), page + ' に版を表示する場所がある');
+    // 外部から読み込むスクリプトには、改ざんを検知する照合値が付いていること
+    const ext = [...html.matchAll(/<script[^>]+src="(https?:[^"]+)"[^>]*>/g)];
+    ext.forEach(m => ok(/integrity="sha(384|512)-[A-Za-z0-9+/=]+"/.test(m[0]) && /crossorigin="anonymous"/.test(m[0]), page + ' の外部スクリプトに照合値がある: ' + m[1]));
+    ok(!/cdnjs\.cloudflare\.com/.test(html), page + ' は地図の部品を自分のサイトから読む');
+  });
+  const lm = read('js/livemap.js');
+  ok(/ROTATE_SRI = 'sha384-[A-Za-z0-9+/=]+'/.test(lm) && lm.includes('addScript(ROTATE_JS, ROTATE_SRI)'), 'あとから読み込む部品にも照合値を付ける');
+  const sriInPage = (read('index.html').match(/integrity="(sha384-[^"]+)"/) || [])[1];
+  ok(sriInPage && lm.includes(sriInPage), '照合値がページ間でそろっている');
+  ok(fs.existsSync(path.join(rootDir, 'vendor/leaflet-1.9.4/LICENSE')), '同梱した部品のライセンスを一緒に置いている');
+}
+
 // 模擬の送り先を立てて、登録 → 送信 → 一覧 → 読み込み を通す
 async function cloudRoundTrip() {
   const PORT = 5199, PASS = 'umi-no-aikotoba';
@@ -765,6 +799,32 @@ async function cloudRoundTrip() {
     ok((await C.loadDay('2026-11-16')).length === 0, '記録の無い日は空');
     const res = await fetch(base + '/members.json');
     ok(res.status === 401, '合言葉の登録は、外から読めない');
+
+    // ---- 日付の名前 ----
+    ok(Object.keys(await C.titles()).length === 0, '名前を付けていなければ空');
+    code = '';
+    try { await C.setTitle('2026-11-15', 'いたずら'); } catch (e) { code = e.code; }
+    ok(code === 'denied', '合言葉を登録していない端末は、日付に名前を付けられない');
+    useDevice('A');
+    ok(await C.setTitle('2026-11-15', ' 部内レース ') === true, '登録済みの端末は、日付に名前を付けられる');
+    ok(await C.setTitle('2026-11-15', '   ') === false, '空の名前は送らない');
+    useDevice('viewer');
+    ok((await C.titles())['2026-11-15'] === '部内レース', '名前は誰でも読める（前後の空白は除く）');
+
+    // ---- 自分の記録の取り消し ----
+    useDevice('B');
+    code = '';
+    try { await C.remove('recA', '2026-11-15'); } catch (e) { code = e.code; }
+    ok(code === 'denied', '他の端末の記録は取り消せない');
+    ok(await C.remove('recB', '2026-11-15') === true, '自分の記録は取り消せる');
+    useDevice('viewer');
+    const left = await C.loadDay('2026-11-15');
+    ok(left.length === 1 && RT.importer.parse(left[0].text, 'x').sail === '1001', '取り消した記録だけが消え、他の人の記録は残る');
+    ok((await C.days()).length === 1, '記録が残っている日は、一覧に残る');
+    useDevice('A');
+    await C.remove('recA', '2026-11-15');
+    useDevice('viewer');
+    ok((await C.days()).length === 0 && (await C.loadDay('2026-11-15')).length === 0, '全員が取り消せば、その日は一覧から消える');
     code = '';
     RT.config.cloud = { databaseURL: 'http://127.0.0.1:1', apiKey: 'test', authURL: base, tokenURL: base };
     try { await C.days(); } catch (e) { code = e.code; }

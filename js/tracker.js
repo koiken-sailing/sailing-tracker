@@ -175,6 +175,8 @@
     $('opsStartBox').hidden = !st.meta.ops;
     $('btnFin').hidden = !st.meta.ops;
     $('sessionNote').hidden = !st.meta.practice;
+    $('opsTabStart').hidden = !st.meta.ops;
+    showOpsPane(st.opsPane || 'marks');
     renderPlan();
     $('btnLive').hidden = !cloudOn;
     $('liveNote').hidden = !cloudOn;
@@ -560,6 +562,14 @@
     $('opsLaps').value = String(st.meta.laps || 2);
     var cd = $('opsCountdown'), seq = st.meta.seq;
     cd.hidden = !seq;
+    var tabStart = $('opsTabStart');
+    if (seq) {
+      var remain = Math.ceil(Math.max(0, seq - Date.now()) / 1000);
+      tabStart.textContent = 'スタート ' + Math.floor(remain / 60) + ':' + pad(remain % 60);
+    } else {
+      tabStart.textContent = 'スタート';
+    }
+    tabStart.classList.toggle('is-live', !!seq);
     $('btnSeq').textContent = seq ? 'スタート手順を取り消す（延期）' : 'スタート手順を開始（5分前）';
     $('btnSeq').classList.toggle('primary', !seq);
     if (seq) {
@@ -602,6 +612,7 @@
         ops: ops,      // 運営艇として記録しているか
         practice: practice,   // マーク練習（選手が自分でマークを打つ）として記録しているか
         land: LAND_TEST,      // 陸上テスト用の入口から始めた記録か（海の上でなくても送る）
+        title: pub && mode !== 'racer' ? $('dayTitle').value.trim().slice(0, 30) : '',   // その日の名前（「部内レース」など）
         marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
         seq: null,     // スタート手順の進行中なら、予定しているスタート時刻
         laps: (store.get(PROFILE) || {}).laps || 2,   // 次のスタートの周回数（前回の値を引き継ぐ）
@@ -749,12 +760,35 @@
       if (st.meta !== meta) return;   // 送っている間に、記録が消された
       meta.sent = { day: r.day, n: r.n, outside: packed.outside, at: Date.now() };
       delete meta.pass;
+      delete meta.unpub;
+      if (meta.title) cloud.setTitle(r.day, meta.title).catch(function () { /* 名前が付かなくても、記録は送れている */ });
       store.set(META, meta);
       st.send = '';
       renderSend();
     }).catch(function (e) {
       if (st.meta !== meta) return;
       st.send = e && e.code === 'passcode' ? 'passcode' : e && e.code === 'net' ? 'net' : 'server';
+      renderSend();
+    });
+  }
+
+  /* 送った記録を、観戦ページから取り消す（スマホの中の記録は残る） */
+  function unpublish() {
+    if (!cloudOn || !st.meta || !st.meta.sent || st.send === 'sending') return;
+    var meta = st.meta, sent = meta.sent;
+    st.send = 'sending';
+    renderSend();
+    cloud.remove(meta.cid, sent.day).then(function () {
+      cloud.liveEnd(meta.cid, sent.day).catch(function () { /* リアルタイムの分は、残っていても次の記録のときに消える */ });
+      if (st.meta !== meta) return;
+      meta.sent = null;
+      meta.unpub = true;      // 取り消した記録は、ページを開き直しても勝手に送り直さない
+      store.set(META, meta);
+      st.send = 'removed';
+      renderSend();
+    }).catch(function () {
+      if (st.meta !== meta) return;
+      st.send = 'unpubfail';
       renderSend();
     });
   }
@@ -775,6 +809,12 @@
     } else if (st.send === 'server') {
       text = '送り先でエラーが起きました。少し待ってから、下のボタンを押してください。';
       cls = 'bad'; retry = true;
+    } else if (st.send === 'removed') {
+      text = '観戦ページから取り消しました。もう一度載せるときは、下のボタンを押してください。';
+      retry = true;
+    } else if (st.send === 'unpubfail') {
+      text = '取り消せませんでした。電波のある場所で、もう一度試してください。';
+      cls = 'bad';
     } else if (sent) {
       text = '観戦ページに送りました（' + sent.n + '点）。' +
         (sent.outside ? '範囲の外だった' + sent.outside + '点は送っていません。' : '');
@@ -789,6 +829,7 @@
     $('btnSend').hidden = !retry;
     $('sendPassField').hidden = !askPass;
     var ok = !!sent && st.send === '';
+    $('btnUnpub').hidden = !(sent && (st.send === '' || st.send === 'unpubfail'));
     $('lnkView').hidden = !ok;
     if (ok) $('lnkView').href = 'index.html?day=' + encodeURIComponent(sent.day);
   }
@@ -799,6 +840,7 @@
     if (!cloudOn) return;
     var pub = $('pubMode').checked;
     $('passField').hidden = !pub || cloud.joined();
+    $('titleField').hidden = !pub || currentMode() === 'racer';   // 名前を付けるのは、運営艇かマーク練習の人
     $('landNote').hidden = !(LAND_TEST && pub);
     $('setupNote').textContent = pub ?
       '記録はまずこのスマホの中に保存されます。記録中は5秒ごとにいまの位置を、記録を終了したときに全体を、観戦ページへ送ります。' :
@@ -968,8 +1010,25 @@
     });
   }
 
+  /* 運営艇・マーク練習の画面を切り替える（marks: マーク / navi: コース設定ナビ / start: スタート） */
+  function showOpsPane(name) {
+    if (name === 'start' && !(st.meta && st.meta.ops)) name = 'marks';
+    st.opsPane = name;
+    Array.prototype.forEach.call(document.querySelectorAll('[data-ops-pane]'), function (pane) {
+      pane.hidden = pane.getAttribute('data-ops-pane') !== name;
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('.ops-tab'), function (tab) {
+      var on = tab.getAttribute('data-pane') === name;
+      tab.classList.toggle('is-on', on);
+      tab.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+  }
+
   /* 運営艇のボタン。1回目に押した瞬間の位置と時刻を覚え、2回目で確定する。 */
   function bindOps() {
+    Array.prototype.forEach.call(document.querySelectorAll('.ops-tab'), function (tab) {
+      tab.addEventListener('click', function () { showOpsPane(tab.getAttribute('data-pane')); });
+    });
     function needFix() {
       var s = $('vStatus');
       s.textContent = 'まだ位置が取れていません。GPS を受信してから押してください。';
@@ -1038,6 +1097,9 @@
       if (prof.pub === false) $('pubMode').checked = false;
     }
     $('pubMode').addEventListener('change', renderSetup);
+    Array.prototype.forEach.call(document.querySelectorAll('input[name="mode"]'), function (r) {
+      r.addEventListener('change', renderSetup);
+    });
     renderSetup();
 
     var problem = '';
@@ -1061,6 +1123,7 @@
       sendNow();
     });
     $('btnSend').addEventListener('click', sendNow);
+    twoStep($('btnUnpub'), 'もう一度押すと、観戦ページから消します', unpublish);
     // 電波が戻ったら、送れなかった記録を送り直す
     window.addEventListener('online', function () {
       if (st.meta && st.meta.stopped && !st.meta.sent && st.send === 'net') sendNow();
@@ -1097,7 +1160,7 @@
     if (loadSaved()) {
       if (st.meta.stopped) {
         showDone();
-        if (!st.meta.sent) sendNow();   // 前回送れなかった記録を送る
+        if (!st.meta.sent && !st.meta.unpub) sendNow();   // 前回送れなかった記録を送る（自分で取り消したものは送り直さない）
       } else {
         $('resumeMsg').textContent = st.meta.sail + '　' + st.meta.name + ' の記録が ' + st.fixes.length +
           '点あります。記録中にページが閉じられたようです。';
