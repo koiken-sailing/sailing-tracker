@@ -1,7 +1,7 @@
 /* 計算部分の自動テスト。実行: node tools/test.js */
 'use strict';
 const path = require('path');
-['geo', 'course', 'sim', 'race', 'analysis'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
+['geo', 'course', 'sim', 'race', 'analysis', 'importer'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
 const RT = globalThis.RT, G = RT.geo;
 
 let failed = 0, passed = 0;
@@ -188,6 +188,72 @@ checkStart('長いライン', { startLen: 180, windMag: 300, windKn: 14 }, 5);
   const c0 = RT.course.build(p, {});
   const c = RT.course.build(p, { m4: c0.latLon(G.offset(c0.targets.m4, c0.windTrue, 10)) });
   near(RT.analysis.lineBias(c), 10, 0.05, '下マークを10m風上に打つと、下マーク側が10m有利');
+}
+
+// ---- 5. 航跡ファイルの読み込み ----
+console.log('5. 航跡ファイルの読み込み');
+{
+  const p = Object.assign({}, RT.course.DEFAULTS);
+  const c = RT.course.build(p, {});
+  const T = 1794000000000;   // 適当な基準時刻
+  /* 本部船の位置から、真東へ秒速2mで進む模擬の記録を作る。
+   * 途中に20秒の空白、最後は止まって10秒に1点、精度の悪い外れ値を1点まぜる。 */
+  function makeFile(sail, name, offsetSec) {
+    const fixes = [];
+    const at = sec => c.latLon({ x: 2 * Math.min(sec, 100), y: 0 });
+    for (let s = 0; s <= 100; s++) {
+      if (s > 40 && s < 60) continue;                       // 20秒の空白（その間も進んでいる）
+      const q = at(s);
+      fixes.push([T + (offsetSec + s) * 1000, q.lat, q.lon, 5, 2, 90]);
+    }
+    for (let s = 110; s <= 160; s += 10) { const q = at(s); fixes.push([T + (offsetSec + s) * 1000, q.lat, q.lon, 4, null, null]); }
+    const bad = c.latLon({ x: 60, y: 500 });
+    fixes.push([T + (offsetSec + 30) * 1000 + 500, bad.lat, bad.lon, 150, null, null]);   // 外れ値
+    return JSON.stringify({ format: 'yacht-track', version: 1, sail: sail, name: name, started: new Date(T).toISOString(), fixes: fixes, log: [] });
+  }
+  const trA = RT.importer.parse(makeFile('111111', 'A艇', 0), 'a.json');
+  const trB = RT.importer.parse(makeFile('222222', 'B艇', 30), 'b.json');
+  ok(trA.sail === '111111' && trA.name === 'A艇', 'セール番号と名前を読み取る');
+  ok(trA.dropped === 1, '精度の悪い点を1点捨てる (' + trA.dropped + ')');
+  near(trA.medAcc, 5, 0.01, '精度の中央値');
+  const startMs = T + 10000;   // スタート信号は記録開始の10秒後とする
+  const data = RT.importer.build([trA, trB], c, startMs);
+  ok(data.t0 === -10, '時間の原点はスタート信号 (t0=' + data.t0 + ')');
+  ok(data.tEnd === 180, '最後の記録まで含む (tEnd=' + data.tEnd + ')');
+  ok(data.boats.length === 2 && data.boats[0].x.length === data.n, '艇の数と配列の長さ');
+  const A = data.boats[0], B = data.boats[1];
+  const idx = t => t - data.t0;
+  near(A.x[idx(20)], 60, 0.5, 'スタート20秒後の位置（東へ60m）');
+  near(A.y[idx(20)], 0, 0.5, '外れ値に引っぱられていない');
+  near(A.spd[idx(20)], 2, 0.05, '艇速（秒速2m）');
+  near(A.hdg[idx(20)], 90, 1, '針路（東）');
+  near(A.x[idx(40)], 100, 0.5, '空白の間は前後の点をまっすぐつなぐ');
+  near(A.spd[idx(40)], 2, 0.05, '空白の間の艇速');
+  near(A.spd[idx(130)], 0, 0.05, '止まっている間の艇速は0');
+  near(A.hdg[idx(130)], 90, 1, '止まっている間は直前の針路を保つ');
+  let jump = 0;
+  for (let k = 1; k < data.n; k++) jump = Math.max(jump, Math.hypot(A.x[k] - A.x[k - 1], A.y[k] - A.y[k - 1]));
+  ok(jump < 2.5, '位置が不自然に飛ばない (最大 ' + jump.toFixed(2) + 'm/秒)');
+  ok(A.from === 0 && A.to === idx(150), 'A艇の記録がある範囲');
+  ok(B.from === idx(20) && B.to === idx(180), 'B艇の記録がある範囲（30秒遅れで開始）');
+  near(B.x[idx(0)], 0, 0.5, '記録が始まる前は最初の位置で止めておく');
+  near(B.hdg[idx(0)], 90, 1, '動き出す前の針路は、最初に動いた向き');
+  // 回航判定や分析に渡しても落ちない
+  const gates = RT.race.gates(c);
+  const ev = RT.race.analyze(gates, data.boats);
+  const st = RT.analysis.all(gates, data.boats, ev);
+  ok(ev.length === 2 && st.length === 2, '読み込んだ航跡を回航判定と分析に渡せる');
+  const rows = RT.race.standings(gates, ev, 50, (i, t) => ({ x: data.boats[i].x[idx(Math.round(t))], y: data.boats[i].y[idx(Math.round(t))] }));
+  ok(rows.length === 2, '順位表を作れる');
+  // 形式の違うファイルは理由つきで断る
+  const throws = fn => { try { fn(); return ''; } catch (e) { return e.message; } };
+  ok(throws(() => RT.importer.parse('これはJSONではない')) !== '', 'JSON でないファイルを断る');
+  ok(throws(() => RT.importer.parse('{"format":"other","fixes":[]}')) !== '', '別の形式のファイルを断る');
+  ok(throws(() => RT.importer.parse('{"format":"yacht-track","fixes":[[1,35,135,5]]}')) !== '', '点が足りないファイルを断る');
+  ok(throws(() => RT.importer.build([trA], c, startMs - 13 * 3600 * 1000)) === '', 'スタート時刻が離れていても記録の幅で判定する');
+  const far = RT.importer.parse(makeFile('333333', 'C艇', 13 * 3600), 'c.json');
+  ok(throws(() => RT.importer.build([trA, far], c, startMs)) !== '', '時間幅が長すぎる組み合わせを断る');
+  console.log('  模擬ファイル2艇: ' + data.n + '秒分に並べ直し');
 }
 
 console.log('\n' + (failed ? 'NG ' + failed + ' 件 / ' : '') + 'OK ' + passed + ' 件');

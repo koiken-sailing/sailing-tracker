@@ -16,7 +16,7 @@
         <h1>ヨットレース トラッカー</h1>
         <p class="brand-sub">ILCA・上下コース</p>
       </div>
-      <span class="badge" title="艇の動きはシミュレーションです">試作・シミュレーション</span>
+      <span class="badge" id="modeBadge">試作・シミュレーション</span>
     </header>
 
     <nav class="tabs" role="tablist">
@@ -161,6 +161,22 @@
     <!-- 選手 -->
     <section class="tabpane" id="tab-crew" role="tabpanel" hidden>
       <div class="section">
+        <h2>航跡データ</h2>
+        <p class="hint" id="dataInfo"></p>
+        <input type="file" id="fileTracks" multiple accept=".json,.txt,application/json,text/plain" hidden>
+        <button class="btn btn-primary" id="btnLoadTracks" type="button">航跡ファイルを読み込む</button>
+        <p class="hint">スマホの記録画面で保存したファイルを選びます。複数まとめて選べます。読み込んだ航跡は、この画面を閉じると消えます（どこにも送信・保存しません）。</p>
+        <div id="importBox" hidden>
+          <div class="row">
+            <label for="startTime">スタート信号の時刻</label>
+            <input type="datetime-local" id="startTime" step="1">
+          </div>
+          <p class="hint">レースの記録なら、実際にスタート信号を出した時刻に合わせてください。順位や分析はこの時刻を基準にします。</p>
+          <table class="marks" id="trackTable"><tbody></tbody></table>
+          <button class="btn btn-quiet" id="btnUseSim" type="button">シミュレーションの表示に戻す</button>
+        </div>
+      </div>
+      <div class="section" id="crewSection">
         <h2>セール番号と名前</h2>
         <p class="hint">本番では、選手が自分のスマホで入力します。ここでは表示の確認用に書き換えられます。</p>
         <p class="hint"><a href="tracker.html">スマホ用の記録画面を開く</a></p>
@@ -202,6 +218,7 @@
 <script src="js/sim.js"></script>
 <script src="js/race.js"></script>
 <script src="js/analysis.js"></script>
+<script src="js/importer.js"></script>
 <script src="js/app.js"></script>
 </body>
 </html>

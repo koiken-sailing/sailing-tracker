@@ -201,6 +201,18 @@ input[type="range"] { width: 100%; accent-color: var(--accent); }
 .marks .pos { color: var(--muted); }
 .marks .moved { color: var(--warn); }
 
+input[type="datetime-local"] {
+  height: 32px;
+  padding: 0 6px;
+  border: 1px solid #c5ced8;
+  border-radius: 6px;
+  background: #fff;
+  font: inherit;
+  font-size: 13px;
+}
+#importBox { margin-top: 4px; }
+#btnLoadTracks { margin-bottom: 8px; }
+
 .crew { width: 100%; border-collapse: collapse; }
 .crew th { font-size: 11px; color: var(--muted); text-align: left; padding: 4px; font-weight: 600; }
 .crew td { padding: 3px 4px; }

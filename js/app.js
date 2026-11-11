@@ -4,9 +4,10 @@
   var G = RT.geo;
   var STORE = 'yacht-tracker-proto-v2';
   var STORE_OLD = 'yacht-tracker-proto-v1';
-  var N_BOATS = 12;
+  var SIM_BOATS = 12;      // シミュレーションの艇数
   var COLORS = ['#e6194b', '#2e9e44', '#4363d8', '#f58231', '#911eb4', '#008080',
     '#e032c8', '#9a6324', '#800000', '#000075', '#6b7a00', '#c79200'];
+  function color(i) { return COLORS[i % COLORS.length]; }
   var NAMES = ['佐藤', '鈴木', '高橋', '田中', '伊藤', '渡辺', '山本', '中村', '小林', '加藤', '吉田', '山田'];
   var SAILS = ['211034', '208517', '214460', '199823', '216002', '205371',
     '212789', '203645', '217190', '209958', '201276', '215533'];
@@ -55,7 +56,7 @@
   var state = {
     params: Object.assign({}, RT.course.DEFAULTS, saved.params || {}),
     overrides: saved.overrides || {},
-    boats: (saved.boats && saved.boats.length === N_BOATS) ? saved.boats : defaultBoats(),
+    boats: (saved.boats && saved.boats.length === SIM_BOATS) ? saved.boats : defaultBoats(),
     label: saved.labelV === 2 && saved.label ? saved.label : 'namespd',
     tail: saved.tail || 'all',
     base: saved.base || 'pale',
@@ -70,6 +71,35 @@
   var course, sim, gates, events, ll, legDefs, legStats;
   var t = 0, playing = false, speed = 10;
   var dirty = true, lastK = -1;
+
+  // いま表示している艇団。シミュレーションなら state.boats、読み込みならファイルの内容。
+  var N = 0, fleet = [], fleetKey = '';
+  // 読み込んだ航跡。null ならシミュレーションを表示する。ブラウザには保存しない（位置情報を残さないため）。
+  //   { tracks: [...], startMs: スタート信号の時刻, relocate: {lat, lon} | null, overrides: {} }
+  var imported = null;
+
+  /* 読み込んだ航跡がコースから遠いとき（陸上での試し撮りなど）は、保存してあるコース位置を
+   * 書き換えず、表示している間だけ本部船を航跡の場所へ移す。 */
+  function curParams() {
+    return imported && imported.relocate ? Object.assign({}, state.params, imported.relocate) : state.params;
+  }
+  function curOverrides() { return imported && imported.relocate ? imported.overrides : state.overrides; }
+  function setCb(lat, lon) {
+    if (imported && imported.relocate) imported.relocate = { lat: lat, lon: lon };
+    else { state.params.lat = lat; state.params.lon = lon; }
+  }
+  function clearOverrides() {
+    if (imported && imported.relocate) imported.overrides = {}; else state.overrides = {};
+  }
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function clockOfDay(ms) {
+    var d = new Date(ms);
+    return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+  }
+  function toLocalInput(ms) {
+    var d = new Date(ms);
+    return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + 'T' + clockOfDay(ms);
+  }
 
   // ---------- 地図 ----------
   // 回転は leaflet-rotate プラグインによる。向きはアプリ側で決めるので、手動回転の操作は切っておく。
@@ -148,7 +178,15 @@
     // 地図を回していても収まるよう、画面の上方向・右方向に沿ってコースの大きさを測る
     var up = G.vec(upBearing()), right = G.vec(upBearing() + 90);
     var minU = Infinity, maxU = -Infinity, minR = Infinity, maxR = -Infinity;
-    [course.cb, course.marks.m1, course.marks.m4, course.marks.pin, course.marks.fin].forEach(function (p) {
+    var pts = [course.cb, course.marks.m1, course.marks.m4, course.marks.pin, course.marks.fin];
+    if (imported && sim) {
+      // 読み込んだ航跡は、コースの外まで広がっていることがあるので、航跡も収まるようにする
+      sim.boats.forEach(function (b) {
+        for (var k = b.from; k <= b.to; k += 10) pts.push({ x: b.x[k], y: b.y[k] });
+        pts.push({ x: b.x[b.to], y: b.y[b.to] });
+      });
+    }
+    pts.forEach(function (p) {
       var pu = G.dot(p, up), pr = G.dot(p, right);
       minU = Math.min(minU, pu); maxU = Math.max(maxU, pu);
       minR = Math.min(minR, pr); maxR = Math.max(maxR, pr);
@@ -195,7 +233,7 @@
       }).addTo(courseGroup);
       mk.on('dragend', function () {
         var p = mk.getLatLng();
-        state.overrides[m.key] = { lat: p.lat, lon: p.lng };
+        curOverrides()[m.key] = { lat: p.lat, lon: p.lng };
         save(); rebuild(true);
       });
     });
@@ -205,7 +243,7 @@
     }).addTo(courseGroup);
     cbm.on('dragend', function () {
       var p = cbm.getLatLng();
-      state.params.lat = p.lat; state.params.lon = p.lng;
+      setCb(p.lat, p.lng);
       save(); rebuild(true);
     });
 
@@ -213,13 +251,17 @@
     applyOrientation();
   }
 
+  /* 艇のマーカーと航跡の線を、いまの艇数ぶん作り直す */
   function makeBoats() {
-    for (var i = 0; i < N_BOATS; i++) {
-      trails.push(L.polyline([], { renderer: canvas, color: COLORS[i], weight: 2, opacity: 0.85, interactive: false }).addTo(map));
+    trails.forEach(function (tr) { map.removeLayer(tr); });
+    markers.forEach(function (m) { map.removeLayer(m.marker); });
+    trails = []; markers = [];
+    for (var i = 0; i < N; i++) {
+      trails.push(L.polyline([], { renderer: canvas, color: color(i), weight: 2, opacity: 0.85, interactive: false }).addTo(map));
     }
-    for (i = 0; i < N_BOATS; i++) {
+    for (i = 0; i < N; i++) {
       var html = '<div class="boat"><svg viewBox="0 0 22 22" aria-hidden="true">' +
-        '<path d="M11 1.5 C15 6.5 15.5 13 14 20 L8 20 C6.5 13 7 6.5 11 1.5 Z" fill="' + COLORS[i] +
+        '<path d="M11 1.5 C15 6.5 15.5 13 14 20 L8 20 C6.5 13 7 6.5 11 1.5 Z" fill="' + color(i) +
         '" stroke="#fff" stroke-width="1.5" stroke-linejoin="round"/></svg><div class="boat-label"></div></div>';
       var mk = L.marker([0, 0], {
         icon: L.divIcon({ className: '', iconSize: [22, 22], iconAnchor: [11, 11], html: html }),
@@ -227,9 +269,20 @@
       }).addTo(map);
       (function (idx) { mk.on('click', function () { toggleSelect(idx); }); })(i);
       var root = mk.getElement();
-      markers.push({ marker: mk, boat: root.querySelector('.boat'), svg: root.querySelector('svg'), label: root.querySelector('.boat-label') });
+      markers.push({ marker: mk, shown: true, boat: root.querySelector('.boat'), svg: root.querySelector('svg'), label: root.querySelector('.boat-label') });
     }
     refreshLabels();
+  }
+
+  /* 艇団が入れ替わったとき（シミュレーション ⇔ 読み込み、艇数の変化）に、艇ごとの表示を作り直す */
+  function resetFleetDom() {
+    makeBoats();
+    boardRows = [];
+    $('board').querySelector('tbody').textContent = '';
+    anaRows = [];
+    $('anaTable').querySelector('tbody').textContent = '';
+    state.selected = [];
+    applySelection();
   }
 
   function fmtKt(mps) { return (mps / RT.perf.KN).toFixed(1); }
@@ -237,7 +290,8 @@
   /* 艇のラベル。「名前と艇速」のときは艇速が変わるたびに書き換える。 */
   function refreshLabels() {
     markers.forEach(function (m, i) {
-      var b = state.boats[i], text = '';
+      var b = fleet[i], text = '';
+      if (!b) return;
       if (state.label === 'name') text = b.name;
       else if (state.label === 'sail') text = b.sail;
       else if (state.label === 'namespd') text = b.name + ' ' + (sim ? fmtKt(boatAt(i, t).spd) : '–') + 'kt';
@@ -271,8 +325,19 @@
 
   // ---------- 計算のやり直し ----------
   function rebuild(keepTime) {
-    course = RT.course.build(state.params, state.overrides);
-    sim = RT.sim.run(course, { n: N_BOATS, seed: 11 });
+    course = RT.course.build(curParams(), curOverrides());
+    if (imported) {
+      sim = RT.importer.build(imported.tracks, course, imported.startMs);
+      fleet = imported.tracks.map(function (tr) {
+        return { sail: tr.sail || '—', name: tr.name || tr.sail || '名前なし' };
+      });
+    } else {
+      sim = RT.sim.run(course, { n: SIM_BOATS, seed: 11 });
+      fleet = state.boats;
+    }
+    N = sim.boats.length;
+    var key = (imported ? 'import:' + imported.serial + ':' : 'sim:') + N;
+    if (key !== fleetKey) { fleetKey = key; resetFleetDom(); }
     gates = RT.race.gates(course);
     events = RT.race.analyze(gates, sim.boats);
     ll = sim.boats.map(function (b) {
@@ -285,7 +350,8 @@
     });
     var seek = $('seek');
     seek.min = sim.t0; seek.max = sim.tEnd;
-    t = keepTime ? clamp(t, sim.t0, sim.tEnd) : Math.min(300, sim.tEnd);
+    // 読み込んだ航跡は、最初に全体が見えるよう最後の時刻を表示する（再生を押すと最初から流れる）
+    t = keepTime ? clamp(t, sim.t0, sim.tEnd) : imported ? sim.tEnd : Math.min(300, sim.tEnd);
     drawCourse();
     renderOps();
     cards.forEach(function (c) { c.shown = -1; });
@@ -328,38 +394,41 @@
   function drawBoats() {
     var kNow = -1, up = upBearing();
     var legOnly = state.tab === 'analysis' && state.anaTrailOnly;
-    for (var i = 0; i < N_BOATS; i++) {
+    for (var i = 0; i < N; i++) {
       var s = boatAt(i, t);
       kNow = s.k;
       var a = ll[i][s.k], b = ll[i][s.k + 1];
       var pos = [lerp(a[0], b[0], s.f), lerp(a[1], b[1], s.f)];
+      // 読み込んだ航跡は、艇ごとに記録のある範囲（kLo〜kHi）が違う。範囲の外ではマーカーを隠す。
+      var bt = sim.boats[i];
+      var kLo = bt.from === undefined ? 0 : bt.from, kHi = bt.to === undefined ? sim.n - 1 : bt.to;
+      var has = s.k >= kLo && s.k <= kHi;
+      if (markers[i].shown !== has) { markers[i].shown = has; markers[i].marker.setOpacity(has ? 1 : 0); }
       markers[i].marker.setLatLng(pos);
       markers[i].svg.style.transform = 'rotate(' + (s.hdg - up).toFixed(1) + 'deg)';
       if (dirty || s.k !== lastK) {
-        var pts;
+        var a0, b0;   // 航跡として描く範囲（1秒ごとの点の番号）
         if (legOnly) {
           // 分析タブ: 選んだ区間だけ（その艇がレグに入ってから出るまで）
           var ev = events[i], j = state.anaLeg;
           if (j === 0) {
             // スタート: 信号の60秒前から40秒後まで
-            var k0 = Math.max(0, -60 - sim.t0), k1 = Math.min(s.k, 40 - sim.t0);
-            pts = k1 > k0 ? ll[i].slice(k0, k1 + 1) : [];
-            if (pts.length && k1 === s.k) pts.push(pos);
+            a0 = -60 - sim.t0; b0 = Math.min(s.k, 40 - sim.t0);
           } else if (ev[j - 1] === undefined || ev[j - 1] > t) {
-            pts = [];
+            a0 = 1; b0 = 0;
           } else {
-            var kf = Math.max(0, Math.floor(ev[j - 1] - sim.t0));
-            var done = ev[j] !== undefined && ev[j] <= t;
-            pts = ll[i].slice(kf, (done ? Math.ceil(ev[j] - sim.t0) : s.k) + 1);
-            if (!done) pts.push(pos);
+            a0 = Math.floor(ev[j - 1] - sim.t0);
+            b0 = ev[j] !== undefined && ev[j] <= t ? Math.ceil(ev[j] - sim.t0) : s.k;
           }
         } else {
           // 「すべて」はスタート30秒前からの全航跡。スタート前のうろうろは直近2分だけ見せる。
-          var from = state.tail === 'all' ? Math.min(Math.max(0, s.k - 120), Math.max(0, -30 - sim.t0))
-            : Math.max(0, s.k - parseInt(state.tail, 10));
-          pts = ll[i].slice(from, s.k + 1);
-          pts.push(pos);
+          a0 = state.tail === 'all' ? Math.min(s.k - 120, -30 - sim.t0) : s.k - parseInt(state.tail, 10);
+          b0 = s.k;
         }
+        a0 = Math.max(a0, kLo, 0);
+        b0 = Math.min(b0, kHi);
+        var pts = b0 >= a0 ? ll[i].slice(a0, b0 + 1) : [];
+        if (pts.length && b0 === s.k && has) pts.push(pos);
         trails[i].setLatLngs(pts);
       }
     }
@@ -379,24 +448,27 @@
     var nFin = 0;
     events.forEach(function (ev) { if (ev.length === gates.length && ev[gates.length - 1] <= t) nFin++; });
     var sub = signalLabel();
-    if (t >= 0 && nFin === N_BOATS) sub = '全艇フィニッシュ';
-    else if (t >= 0 && nFin > 0) sub = 'レース中・フィニッシュ ' + nFin + '/' + N_BOATS + '艇';
+    if (t >= 0 && nFin === N) sub = '全艇フィニッシュ';
+    else if (t >= 0 && nFin > 0) sub = 'レース中・フィニッシュ ' + nFin + '/' + N + '艇';
+    else if (t >= 0 && imported) sub = '記録の再生';
+    // 読み込んだ航跡は、実際の時刻も添える
+    if (imported) sub = clockOfDay(imported.startMs + t * 1000) + '　' + sub;
     $('clockSub').textContent = sub;
     $('seek').value = Math.round(t);
-    $('raceStatus').textContent = t < 0 ? 'スタート前（' + signalLabel() + '）' :
-      nFin === N_BOATS ? 'レース終了' : 'レース中';
+    $('raceStatus').textContent = (imported ? '読み込んだ航跡・' : '') + (t < 0 ? 'スタート前（' + signalLabel() + '）' :
+      nFin === N ? 'レース終了' : nFin === 0 && imported ? 'スタート後' : 'レース中');
   }
 
   function ensureBoardRows() {
     if (boardRows.length) return;
     var tbody = $('board').querySelector('tbody');
-    for (var i = 0; i < N_BOATS; i++) {
+    for (var i = 0; i < N; i++) {
       var tr = el('tr');
       tr.dataset.i = i;
       var rank = el('td', 'rank');
       var sail = el('td', 'sail');
       var dot = el('span', 'dot');
-      dot.style.background = COLORS[i];
+      dot.style.background = color(i);
       var sailText = el('span');
       sail.appendChild(dot); sail.appendChild(sailText);
       var name = el('td', 'name'), st = el('td', 'st'), spd = el('td', 'spd'), gap = el('td', 'gap');
@@ -404,11 +476,6 @@
       tbody.appendChild(tr);
       boardRows.push({ tr: tr, rank: rank, sail: sailText, name: name, st: st, spd: spd, gap: gap });
     }
-    tbody.addEventListener('click', function (e) {
-      var tr = e.target.closest('tr');
-      if (!tr) return;
-      toggleSelect(parseInt(tr.dataset.i, 10));
-    });
   }
 
   function drawBoard() {
@@ -419,7 +486,7 @@
     var lead = null;
     rows.forEach(function (r) { if (!lead && r.started && !r.finished) lead = r; });
     rows.forEach(function (r) {
-      var br = boardRows[r.i], b = state.boats[r.i];
+      var br = boardRows[r.i], b = fleet[r.i];
       br.rank.textContent = r.rank === null ? '–' : r.rank;
       br.sail.textContent = b.sail;
       br.name.textContent = b.name;
@@ -453,7 +520,7 @@
       var head = el('div', 'card-head');
       var title = el('div', 'card-title');
       var dot = el('span', 'dot');
-      dot.style.background = COLORS[i];
+      dot.style.background = color(i);
       var titleText = el('span');
       title.appendChild(dot); title.appendChild(titleText);
       var close = el('button', 'card-close', '×');
@@ -481,7 +548,7 @@
   }
   function updateCards(rows) {
     cards.forEach(function (c) {
-      var b = state.boats[c.i], s = boatAt(c.i, t), row = null;
+      var b = fleet[c.i], s = boatAt(c.i, t), row = null;
       rows.forEach(function (r) { if (r.i === c.i) row = r; });
       c.title.textContent = b.sail + '　' + b.name;
       c.vals.spd.textContent = fmtKt(s.spd) + ' kt';
@@ -525,19 +592,19 @@
   function ensureAnaRows() {
     if (anaRows.length) return;
     var tbody = $('anaTable').querySelector('tbody');
-    for (var i = 0; i < N_BOATS; i++) {
+    for (var i = 0; i < N; i++) {
       var tr = el('tr');
       tr.dataset.i = i;
       var rank = el('td', 'rank');
       var name = el('td', 'name');
       var dot = el('span', 'dot');
-      dot.style.background = COLORS[i];
+      dot.style.background = color(i);
       var nameText = el('span');
       name.appendChild(dot); name.appendChild(nameText);
       var side = el('td', 'side');
       var bar = el('div', 'sidebar');
       var range = el('div', 'sidebar-range');
-      range.style.background = COLORS[i];
+      range.style.background = color(i);
       var mean = el('div', 'sidebar-mean');
       bar.appendChild(range); bar.appendChild(mean);
       var sideText = el('div', 'side-text');
@@ -547,10 +614,6 @@
       tbody.appendChild(tr);
       anaRows.push({ tr: tr, rank: rank, name: nameText, bar: bar, range: range, mean: mean, sideText: sideText, tacks: tacks, time: time, dist: dist });
     }
-    tbody.addEventListener('click', function (e) {
-      var tr = e.target.closest('tr');
-      if (tr) toggleSelect(parseInt(tr.dataset.i, 10));
-    });
   }
 
   /* スタート信号からの秒数。「+2.5秒」は信号の2.5秒後にラインを切ったという意味。 */
@@ -576,7 +639,7 @@
   /* スタートの表。ラインを切った順に並べる。 */
   function drawStartTable(tbody) {
     var list = [];
-    for (var i = 0; i < N_BOATS; i++) {
+    for (var i = 0; i < N; i++) {
       var s = legStats[i][0];
       list.push({ i: i, s: s && events[i][0] <= t ? s : null });
     }
@@ -587,7 +650,7 @@
     list.forEach(function (r, k) {
       var row = anaRows[r.i], s = r.s;
       row.rank.textContent = s ? k + 1 : '–';
-      row.name.textContent = state.boats[r.i].name;
+      row.name.textContent = fleet[r.i].name;
       row.bar.style.visibility = s ? 'visible' : 'hidden';
       row.range.style.width = '0';
       row.sideText.textContent = s ? '本部船から' + Math.round(s.fromCb) + 'm' : (t < 0 ? 'スタート前' : '');
@@ -616,7 +679,7 @@
       if (L[j]) scale = Math.max(scale, Math.abs(L[j].latMin), Math.abs(L[j].latMax));
     });
     var list = [];
-    for (var i = 0; i < N_BOATS; i++) {
+    for (var i = 0; i < N; i++) {
       var s = legStats[i][j];
       list.push({ i: i, s: s && events[i][j] <= t ? s : null });   // 再生時刻までに走り終えたレグだけ
     }
@@ -628,7 +691,7 @@
       var row = anaRows[r.i], s = r.s;
       var showSide = !!s && def.kind !== 'reach';
       row.rank.textContent = s ? k + 1 : '–';
-      row.name.textContent = state.boats[r.i].name;
+      row.name.textContent = fleet[r.i].name;
       row.bar.style.visibility = showSide ? 'visible' : 'hidden';
       row.sideText.textContent = showSide ? s.side : (s ? '' : '走行中');
       if (showSide) {
@@ -704,7 +767,7 @@
       tr.appendChild(el('td', null, r[1]));
       lt.appendChild(tr);
     });
-    $('btnResetMarks').hidden = Object.keys(state.overrides).length === 0;
+    $('btnResetMarks').hidden = Object.keys(curOverrides()).length === 0;
   }
 
   var rebuildTimer = null;
@@ -734,16 +797,16 @@
     });
     $('btnCbCenter').addEventListener('click', function () {
       var c = map.getCenter();
-      state.params.lat = c.lat; state.params.lon = c.lng;
-      state.overrides = {};
+      setCb(c.lat, c.lng);
+      clearOverrides();
       save(); rebuild(true); fitCourse();
     });
     $('btnCbHere').addEventListener('click', function () {
       if (!navigator.geolocation) { toast('この端末では現在地を取得できません。'); return; }
       toast('現在地を取得しています…');
       navigator.geolocation.getCurrentPosition(function (pos) {
-        state.params.lat = pos.coords.latitude; state.params.lon = pos.coords.longitude;
-        state.overrides = {};
+        setCb(pos.coords.latitude, pos.coords.longitude);
+        clearOverrides();
         save(); rebuild(true); fitCourse();
         toast('本部船を現在地に置きました（精度 約' + Math.round(pos.coords.accuracy) + 'm）。');
       }, function () {
@@ -751,7 +814,7 @@
       }, { enableHighAccuracy: true, timeout: 15000 });
     });
     $('btnResetMarks').addEventListener('click', function () {
-      state.overrides = {};
+      clearOverrides();
       save(); rebuild(true);
     });
     $('btnResetAll').addEventListener('click', function () {
@@ -782,7 +845,7 @@
       var tr = el('tr');
       var c0 = el('td');
       var dot = el('span', 'dot');
-      dot.style.background = COLORS[i];
+      dot.style.background = color(i);
       c0.appendChild(dot);
       tr.appendChild(c0);
       [['sail', 8, 'セール番号'], ['name', 12, '名前']].forEach(function (f) {
@@ -800,6 +863,86 @@
         tr.appendChild(td);
       });
       tb.appendChild(tr);
+    });
+  }
+
+  // ---------- 航跡ファイルの読み込み ----------
+  var importSerial = 0;
+
+  /* items = [{ name: ファイル名, text: 中身 }]。読めたファイルだけを使う。 */
+  function importTexts(items) {
+    var tracks = [], errors = [];
+    items.forEach(function (it) {
+      try { tracks.push(RT.importer.parse(it.text, it.name)); }
+      catch (e) { errors.push((it.name || 'ファイル') + ': ' + e.message); }
+    });
+    if (!tracks.length) { toast(errors[0] || '読み込めるファイルがありませんでした。'); return false; }
+    tracks.sort(function (a, b) { return a.sail < b.sail ? -1 : a.sail > b.sail ? 1 : 0; });
+    var first = Infinity;
+    tracks.forEach(function (tr) { first = Math.min(first, tr.first); });
+    var next = {
+      tracks: tracks,
+      startMs: Math.floor(first / 1000) * 1000,   // とりあえず記録の先頭をスタート時刻にしておく
+      relocate: null, overrides: {}, serial: ++importSerial
+    };
+    // いつものコースから5km以上離れた記録（陸上での試し撮りなど）は、表示の間だけ本部船を航跡の出発点に置く
+    var home = RT.course.build(state.params, state.overrides);
+    var p0 = home.proj.toXY(tracks[0].fixes[0].lat, tracks[0].fixes[0].lon);
+    if (Math.hypot(p0.x, p0.y) > 5000) next.relocate = { lat: tracks[0].fixes[0].lat, lon: tracks[0].fixes[0].lon };
+
+    var prev = imported;
+    imported = next;
+    try {
+      rebuild(false);
+    } catch (e) {
+      imported = prev; fleetKey = '';
+      rebuild(false);
+      toast(e.message);
+      return false;
+    }
+    setPlaying(false);
+    renderData();
+    fitCourse();
+    toast(tracks.length + '艇の航跡を読み込みました。' +
+      (errors.length ? '読めなかったファイルが' + errors.length + '件あります。' : ''));
+    return true;
+  }
+
+  function clearImport() {
+    imported = null;
+    setPlaying(false);
+    rebuild(false);
+    renderData();
+    fitCourse();
+  }
+
+  /* 選手タブの「航跡データ」欄。いま何を表示しているかと、読み込んだ航跡の一覧。 */
+  function renderData() {
+    var on = !!imported;
+    $('modeBadge').textContent = on ? '読み込んだ航跡' : '試作・シミュレーション';
+    $('importBox').hidden = !on;
+    $('crewSection').hidden = on;
+    $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
+      imported.tracks.length + '艇の航跡を表示しています。' + (imported.relocate ?
+        'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
+    if (!on) return;
+    $('startTime').value = toLocalInput(imported.startMs);
+    var tb = $('trackTable').querySelector('tbody');
+    tb.textContent = '';
+    imported.tracks.forEach(function (tr, i) {
+      var row = el('tr');
+      var c0 = el('td');
+      var dot = el('span', 'dot');
+      dot.style.background = color(i);
+      c0.appendChild(dot);
+      c0.appendChild(document.createTextNode((tr.sail || '—') + '　' + (tr.name || '')));
+      row.appendChild(c0);
+      var c1 = el('td', 'pos');
+      c1.appendChild(el('div', null, clockOfDay(tr.first) + ' 〜 ' + clockOfDay(tr.last)));
+      c1.appendChild(el('div', null, tr.fixes.length + '点' + (tr.dropped ? '（精度の悪い' + tr.dropped + '点を除外）' : '')));
+      row.appendChild(c1);
+      row.appendChild(el('td', null, tr.medAcc === null ? '' : '精度 ±' + Math.round(tr.medAcc) + 'm'));
+      tb.appendChild(row);
     });
   }
 
@@ -911,6 +1054,41 @@
     $('optTail').value = state.tail;
     $('optTail').addEventListener('change', function () { state.tail = this.value; save(); dirty = true; });
     $('btnClearSel').addEventListener('click', clearSelection);
+    // 順位表と分析表: 行をクリックしたら、その艇の選択を切り替える
+    ['board', 'anaTable'].forEach(function (id) {
+      $(id).querySelector('tbody').addEventListener('click', function (e) {
+        var tr = e.target.closest('tr');
+        if (tr) toggleSelect(parseInt(tr.dataset.i, 10));
+      });
+    });
+    // 航跡ファイルの読み込み
+    $('btnLoadTracks').addEventListener('click', function () { $('fileTracks').click(); });
+    $('fileTracks').addEventListener('change', function () {
+      var files = Array.prototype.slice.call(this.files || []);
+      this.value = '';
+      if (!files.length) return;
+      Promise.all(files.map(function (f) {
+        return f.text().then(function (text) { return { name: f.name, text: text }; });
+      })).then(importTexts).catch(function () { toast('ファイルを読み込めませんでした。'); });
+    });
+    $('btnUseSim').addEventListener('click', clearImport);
+    $('startTime').addEventListener('change', function () {
+      if (!imported) return;
+      var ms = new Date(this.value).getTime();
+      if (!isFinite(ms)) { this.value = toLocalInput(imported.startMs); return; }
+      var prev = imported.startMs;
+      imported.startMs = ms;
+      try {
+        rebuild(false);
+        t = clamp(0, sim.t0, sim.tEnd);   // スタートの瞬間を表示する
+        dirty = true;
+      } catch (e) {
+        imported.startMs = prev;
+        rebuild(false);
+        this.value = toLocalInput(prev);
+        toast(e.message);
+      }
+    });
     $('optBase').value = state.base;
     $('optBase').addEventListener('change', function () { state.base = this.value; save(); setBase(state.base); });
     $('panelToggle').addEventListener('click', function () { $('app').classList.toggle('panel-open'); });
@@ -930,9 +1108,9 @@
   bindUi();
   bindOps();
   renderCrew();
+  renderData();
   course = RT.course.build(state.params, state.overrides);
   map.setView([state.params.lat, state.params.lon], 15);
-  makeBoats();
   rebuild(false);
   fitCourse();
   requestAnimationFrame(frame);
@@ -941,6 +1119,10 @@
   window.RTApp = {
     state: state,
     map: map,
+    importTexts: importTexts,
+    clearImport: clearImport,
+    imported: function () { return imported; },
+    sim: function () { return sim; },
     info: function () { return { t: t, playing: playing, speed: speed, tEnd: sim.tEnd, gates: gates.length, events: events.map(function (e) { return e.length; }) }; },
     seek: function (v) { t = clamp(v, sim.t0, sim.tEnd); dirty = true; }
   };

@@ -11,7 +11,9 @@
   var PROFILE = 'yt-track-profile';
   var CHUNK_SIZE = 20;     // この点数がたまるごとに保存する
   var MIN_GAP_MS = 900;    // 記録の最小間隔（およそ1秒に1点）
-  var STALE_MS = 10000;    // これ以上位置が届かなければ「途切れ」と表示する
+  // これ以上位置が届かなければ「途切れ」と表示する。
+  // iPhone は止まっている間、位置の通知を10秒に1回ほどに間引くので、短くしすぎると誤警報になる。
+  var STALE_MS = 30000;
   var HOLD_MS = 1500;      // 航海モードを解除する長押しの時間
   var MAX_LOG = 400;
   var KN = 0.514444;
@@ -38,6 +40,7 @@
     watchId: null,
     wake: null,
     wakeSupported: 'wakeLock' in navigator,
+    beganAt: 0,          // 記録を始めた（再開した）時刻
     lastFixAt: 0,        // 最後に位置を受け取った時刻
     lastAcc: null,
     lastSpeed: null,
@@ -76,6 +79,8 @@
   function onPosition(pos) {
     var c = pos.coords, now = Date.now();
     var tms = typeof pos.timestamp === 'number' && pos.timestamp > 1e12 ? Math.round(pos.timestamp) : now;
+    // 開始直後に、端末が覚えていた古い位置が届くことがある。記録を始める前の時刻のものは捨てる。
+    if (tms < st.beganAt - 2000) return;
     st.lastFixAt = now;
     st.gpsError = 0;
     st.lastAcc = c.accuracy;
@@ -127,6 +132,7 @@
     st.meta.stopped = false;
     store.set(META, st.meta);
     st.recording = true;
+    st.beganAt = Date.now();
     st.gpsError = 0;
     st.lastFixAt = 0;
     st.lastSpeed = null;
@@ -277,7 +283,8 @@
   }
   function share() {
     var f = shareFile();
-    if (f) navigator.share({ files: [f], title: '航跡の記録' }).catch(function () {});
+    // 題名を付けると、保存先によっては題名だけの余分なファイルができるので、ファイルだけを渡す
+    if (f) navigator.share({ files: [f] }).catch(function () {});
   }
   function download() {
     var blob = new Blob([JSON.stringify(buildFile())], { type: 'application/json' });
