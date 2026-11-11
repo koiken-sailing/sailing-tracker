@@ -11,8 +11,8 @@
   RT.config = {
     // 2つとも空のあいだは、送信の機能そのものが画面に出ない
     cloud: {
-      databaseURL: '',
-      apiKey: ''
+      databaseURL: 'https://sailing-tracker-6007b-default-rtdb.asia-southeast1.firebasedatabase.app',
+      apiKey: 'AIzaSyCQrz6OYLMcEibRS1r7ks96lCCFSy_ogG0'
     },
 
     // 公開してよい範囲（海の上）を囲む多角形。[緯度, 経度] を順に並べる。
