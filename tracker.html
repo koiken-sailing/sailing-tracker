@@ -82,6 +82,19 @@
       <button class="btn" id="btnFin" type="button">フィニッシュマークを打った</button>
       <ul class="ops-list" id="opsMarks"></ul>
       <p class="ops-dist" id="opsDist" hidden></p>
+      <div class="plan" id="planBox">
+        <h2>コース設定ナビ</h2>
+        <p class="note">上マークか下マークのどちらかを打ったあと、風軸と距離を入れると、残りのマークを打つ位置（目標）と、そこまでの距離が出ます。</p>
+        <div class="pick"><label for="plWind">風軸（コンパスの読み）</label>
+          <span class="step"><button type="button" data-plan="wind" data-step="-5" aria-label="風軸を5度減らす">−</button><input id="plWind" type="number" inputmode="numeric" min="0" max="359" step="1"><span class="unit">°</span><button type="button" data-plan="wind" data-step="5" aria-label="風軸を5度増やす">＋</button></span></div>
+        <div class="pick"><label for="plDist">上下の距離</label>
+          <span class="step"><button type="button" data-plan="dist" data-step="-50" aria-label="上下の距離を50m減らす">−</button><input id="plDist" type="number" inputmode="numeric" min="50" max="3000" step="10"><span class="unit">m</span><button type="button" data-plan="dist" data-step="50" aria-label="上下の距離を50m増やす">＋</button></span></div>
+        <div class="pick" id="plLineRow"><label for="plLine">スタートラインの長さ</label>
+          <span class="step"><button type="button" data-plan="line" data-step="-10" aria-label="スタートラインを10m短くする">−</button><input id="plLine" type="number" inputmode="numeric" min="10" max="500" step="5"><span class="unit">m</span><button type="button" data-plan="line" data-step="10" aria-label="スタートラインを10m長くする">＋</button></span></div>
+        <button class="btn" id="plCog" type="button">いまの進行方向を風軸にする</button>
+        <p class="ops-dist" id="planInfo" hidden></p>
+        <button class="btn primary" id="btnNav" type="button">地図でナビを見る</button>
+      </div>
       <p class="note" id="sessionNote" hidden>同じマークを3分以上あけて打ち直すと、観戦ページでは別のセッションに分かれます。</p>
 
       <div id="opsStartBox">
@@ -140,6 +153,22 @@
     </ul>
   </section>
 </main>
+
+<div id="navView" hidden>
+  <div class="nv-top">
+    <div class="nv-name" id="nvName"></div>
+    <div class="nv-main"><b id="nvDist">–</b><span id="nvBrg"></span></div>
+    <div class="nv-parts"><span id="nvAlong"></span><span id="nvCross"></span></div>
+  </div>
+  <div id="navMap"></div>
+  <div class="nv-bottom">
+    <button class="btn primary" id="nvDrop" type="button"></button>
+    <div class="nv-row">
+      <button class="btn" id="nvNext" type="button">次の目標へ</button>
+      <button class="btn" id="nvClose" type="button">閉じる</button>
+    </div>
+  </div>
+</div>
 
 <div id="liveView" hidden>
   <div class="lv-top">

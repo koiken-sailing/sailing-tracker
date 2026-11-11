@@ -369,7 +369,11 @@
     });
     // コースの大きさ（上下のマークの距離と、スタートラインの長さ）
     var pr = imported && imported.practice, sizes = [];
-    if (!pr || (pr.m1 && pr.m4)) sizes.push('上マーク〜下マーク ' + Math.round(G.dist(course.marks.m1, course.marks.m4)) + 'm');
+    if (!pr || (pr.m1 && pr.m4)) {
+      // 距離と、下マークから上マークを見た角度（コンパスの読み）
+      var axisMag = Math.round(G.norm360(course.toMag(G.bearing(course.marks.m4, course.marks.m1)))) % 360;
+      sizes.push('上マーク〜下マーク ' + Math.round(G.dist(course.marks.m1, course.marks.m4)) + 'm・' + axisMag + '°');
+    }
     if (!pr) sizes.push('スタートライン ' + Math.round(G.dist(course.cb, course.marks.pin)) + 'm');
     $('courseInfo').textContent = sizes.join('　／　');
     var seek = $('seek');

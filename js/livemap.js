@@ -106,6 +106,8 @@
     var startPos = null;     // 最後に記録されたスタートの位置（本部船の位置）
     var guides = {};         // 距離の線とラベル（axis: 上下のマークの間、line: スタートライン）
     var dists = { ud: null, line: null };
+    var planUp = null;       // ナビのとき、画面の上にする方位（入力した風軸）
+    var targets = [], targetLayers = {}, navTo = null;   // 目標のマーク位置と、いま案内している目標
     var lastError = '';
 
     if (free) {
@@ -178,7 +180,8 @@
       });
       // 上マークが上になるように地図を回す
       var want = 0;
-      if (marks.m1 && marks.m4) want = G.bearing(proj.toXY(marks.m4.lat, marks.m4.lon), proj.toXY(marks.m1.lat, marks.m1.lon));
+      if (planUp !== null) want = planUp;
+      else if (marks.m1 && marks.m4) want = G.bearing(proj.toXY(marks.m4.lat, marks.m4.lon), proj.toXY(marks.m1.lat, marks.m1.lon));
       if (Math.abs(G.norm180(want - up)) > 0.5) {
         up = want;
         fitting = true;
@@ -188,8 +191,33 @@
       }
     }
 
+    /* 目標のマーク位置を、点線の印で描く（いま案内している目標は色を変える） */
+    function drawTargets() {
+      var seen = {};
+      targets.forEach(function (t) {
+        seen[t.key] = true;
+        var layer = targetLayers[t.key];
+        if (!layer) {
+          var wrap = document.createElement('div');
+          wrap.className = 'lv-target' + (t.key === 'cb' ? ' is-box' : '');
+          var ring = document.createElement('div'); ring.className = 'lv-target-ring';
+          var name = document.createElement('div'); name.className = 'lv-target-name'; name.textContent = t.name;
+          wrap.appendChild(ring); wrap.appendChild(name);
+          layer = targetLayers[t.key] = L.marker([t.lat, t.lon], {
+            interactive: false, keyboard: false, zIndexOffset: 450,
+            icon: L.divIcon({ className: '', iconSize: [24, 24], iconAnchor: [12, 12], html: wrap.outerHTML })
+          }).addTo(map);
+        }
+        layer.setLatLng([t.lat, t.lon]);
+        layer.getElement().querySelector('.lv-target').classList.toggle('is-sel', !!navTo && navTo.key === t.key);
+      });
+      Object.keys(targetLayers).forEach(function (k) {
+        if (!seen[k]) { map.removeLayer(targetLayers[k]); delete targetLayers[k]; }
+      });
+    }
+
     /* 2点の間に線を引き、まんなかに距離を書く。a か b が無ければ消す。 */
-    function drawGuide(key, a, b, style, prefix) {
+    function drawGuide(key, a, b, style, prefix, suffix) {
       var g = guides[key];
       if (!a || !b) {
         if (g) { map.removeLayer(g.line); map.removeLayer(g.label); delete guides[key]; }
@@ -209,14 +237,23 @@
       }
       g.line.setLatLngs([[a.lat, a.lon], [b.lat, b.lon]]);
       g.label.setLatLng(mid);
-      g.text.textContent = prefix + Math.round(d) + 'm';
+      g.text.textContent = prefix + Math.round(d) + 'm' + (suffix || '');
       return d;
     }
     /* 上下のマークの距離と、スタートラインの長さを描く。
      * 本部船の位置は、動いている運営艇がいればその位置（ラインを合わせている最中でも見られるように）、
      * いなければ最後に記録されたスタートの位置。 */
     function drawGuides(now) {
-      dists.ud = drawGuide('axis', marks.m1, marks.m4, { color: '#5b6b7a', weight: 1.5, opacity: 0.8, dashArray: '4 6' }, '');
+      // 上下のマークの間には、距離と、下マークから上マークを見た角度（コンパスの読み）を書く
+      var angle = '';
+      if (marks.m1 && marks.m4) {
+        var brg = G.bearing(proj.toXY(marks.m4.lat, marks.m4.lon), proj.toXY(marks.m1.lat, marks.m1.lon));
+        angle = '・' + (Math.round(G.norm360(brg + G.declinationWest(marks.m4.lat, marks.m4.lon))) % 360) + '°';
+      }
+      dists.ud = drawGuide('axis', marks.m1, marks.m4, { color: '#5b6b7a', weight: 1.5, opacity: 0.8, dashArray: '4 6' }, '', angle);
+      // ナビ: 自分の位置から、案内している目標まで線を引く
+      var me = opts.selfId && boats[opts.selfId] && boats[opts.selfId].fixes.length ? boats[opts.selfId].fixes[boats[opts.selfId].fixes.length - 1] : null;
+      drawGuide('nav', me && navTo ? { lat: me[1], lon: me[2] } : null, navTo, { color: '#0b6bd3', weight: 3, opacity: 0.9 }, '');
       var cb = null;
       Object.keys(boats).forEach(function (id) {
         var b = boats[id];
@@ -234,9 +271,10 @@
       if (!size.x || !size.y) return;
       var pts = [];
       Object.keys(marks).forEach(function (k) { pts.push(proj.toXY(marks[k].lat, marks[k].lon)); });
+      targets.forEach(function (t) { pts.push(proj.toXY(t.lat, t.lon)); });
       Object.keys(boats).forEach(function (id) {
         var b = boats[id];
-        if (!b.fixes.length || now - b.lastT > STALE_MS * 3) return;
+        if (!b.fixes.length || (!opts.local && now - b.lastT > STALE_MS * 3)) return;
         var f = b.fixes[b.fixes.length - 1];
         pts.push(proj.toXY(f[1], f[2]));
       });
@@ -270,6 +308,7 @@
     function redraw() {
       var now = Date.now();
       drawMarks();
+      drawTargets();
       Object.keys(boats).forEach(function (id) { drawBoat(boats[id], now); });
       drawGuides(now);
       if (autoFit) fit(false);
@@ -336,6 +375,7 @@
       if (running) return;
       running = true;
       map.invalidateSize();
+      if (opts.local) { redraw(); return; }   // ナビの地図は、ほかの艇を読みに行かない（通信しない）
       poll();
       timer = setInterval(function () { if (document.visibilityState !== 'hidden') poll(); }, POLL_MS);
     }
@@ -366,10 +406,23 @@
         b.fixes = selfFixes;
         if (selfFixes.length) b.lastT = selfFixes[selfFixes.length - 1][0];
       },
+      /* ナビ用: この端末で打ったマーク、目標のマーク位置、案内している目標、画面の上にする方位を渡す。
+       * plan = { upTrue, marks: { m1, m4, fin }, targets: [{ key, name, lat, lon }], selected: { key, lat, lon } | null } */
+      setPlan: function (plan) {
+        var next = {};
+        Object.keys(plan.marks || {}).forEach(function (k) { if (plan.marks[k]) next[k] = plan.marks[k]; });
+        marks = next;
+        targets = plan.targets || [];
+        navTo = plan.selected || null;
+        planUp = typeof plan.upTrue === 'number' ? plan.upTrue : null;
+        if (running) redraw();
+      },
       /* 全体が見えるように合わせ直す（指で動かしたあとに、自動の合わせ直しを再開する） */
       refit: function () { autoFit = true; map.invalidateSize(); fit(true); },
       info: function () {
-        var out = { day: day, up: Math.round(up), marks: Object.keys(marks), dists: dists, boats: {} };
+        var out = { day: day, up: Math.round(up), marks: Object.keys(marks), dists: dists, boats: {},
+          targets: targets.map(function (t) { return t.key; }), navTo: navTo && navTo.key,
+          labels: Object.keys(guides).map(function (k) { return k + ':' + guides[k].text.textContent; }) };
         Object.keys(boats).forEach(function (id) { out.boats[id] = { n: boats[id].fixes.length, lastT: boats[id].lastT, nick: boats[id].nick, shown: !!boats[id].marker }; });
         return out;
       }

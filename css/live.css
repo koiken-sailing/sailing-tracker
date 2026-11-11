@@ -44,6 +44,23 @@
   white-space: nowrap;
 }
 
+.lv-target { position: relative; width: 24px; height: 24px; }
+.lv-target-ring { width: 24px; height: 24px; box-sizing: border-box; border: 3px dashed #d2451e; border-radius: 50%; background: rgba(255, 255, 255, .55); }
+.lv-target.is-box .lv-target-ring { border-radius: 4px; border-color: #0c2340; }
+.lv-target.is-sel .lv-target-ring { border-style: solid; background: rgba(255, 221, 87, .8); }
+.lv-target-name {
+  position: absolute;
+  left: 28px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .92);
+  color: #7a2a12;
+  font: 700 12px/1.5 "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  white-space: nowrap;
+}
+
 .lv-dist {
   display: inline-block;
   transform: translate(-50%, -50%);

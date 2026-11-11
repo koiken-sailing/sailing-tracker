@@ -111,6 +111,35 @@ body {
 .modes .check { margin-bottom: 12px; }
 .landnote { padding: 10px 12px; border: 1px solid var(--warn-line); border-radius: 8px; background: var(--warn-bg); font-size: 14px; }
 
+/* コース設定ナビ */
+.plan { margin: 0 0 14px; padding: 12px 12px 2px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.plan h2 { margin: 0 0 6px; }
+.plan .pick { display: block; }
+.plan .pick label { display: block; margin-bottom: 6px; }
+.step { display: flex; align-items: center; gap: 6px; }
+.step button { flex: none; width: 52px; height: 48px; border: 1px solid #c5ced8; border-radius: 8px; background: #fff; font: inherit; font-size: 22px; font-weight: 700; color: var(--ink); }
+.step input { flex: 1; min-width: 0; width: 100%; height: 48px; padding: 0 8px; border: 1px solid #c5ced8; border-radius: 8px; background: #fff; font: inherit; font-size: 20px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+.step input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+.step .unit { flex: none; width: 1.2em; font-weight: 600; }
+
+/* ナビ画面: 画面全体に地図と目標までの距離。ボタンは押せるが、地図は指で動かせない */
+#navView { position: fixed; inset: 0; z-index: 9997; display: flex; flex-direction: column; background: #dfe7ef; user-select: none; -webkit-user-select: none; }
+.nv-top { padding: calc(8px + env(safe-area-inset-top)) 14px 10px; background: var(--navy); color: #fff; font-variant-numeric: tabular-nums; }
+.nv-top.arrived { background: #17753a; }
+.nv-name { font-size: 14px; color: #b9c8da; }
+.nv-top.arrived .nv-name { color: #d9f2e2; }
+.nv-main { display: flex; align-items: baseline; gap: 12px; }
+.nv-main b { font-size: 46px; line-height: 1.15; }
+.nv-main span { font-size: 18px; }
+.nv-parts { display: flex; gap: 8px; margin-top: 4px; }
+.nv-parts span { flex: 1; padding: 4px 8px; border-radius: 6px; background: rgba(255, 255, 255, .14); font-size: 16px; font-weight: 600; }
+.nv-parts span:empty { display: none; }
+#navMap { flex: 1; min-height: 0; pointer-events: none; }
+.nv-bottom { padding: 10px 14px calc(10px + env(safe-area-inset-bottom)); background: #fff; border-top: 1px solid var(--line); }
+.nv-bottom .btn { margin-bottom: 8px; }
+.nv-row { display: flex; gap: 8px; }
+.nv-row .btn { flex: 1; margin-bottom: 0; }
+
 .pick { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; font-weight: 600; }
 .pick select { height: 48px; min-width: 120px; padding: 0 10px; border: 1px solid #c5ced8; border-radius: 8px; background: #fff; font: inherit; font-size: 18px; }
 

@@ -62,6 +62,9 @@
     storageFull: false,
     timer: null,
     wakePending: false,
+    nav: null,           // コース設定ナビの地図（初めて開いたときに作る）
+    navSel: null,        // ナビで案内している目標（null なら、まだ打っていない最初のもの）
+    navArrived: null,    // 到着の合図を鳴らした目標
     send: '',            // 送信の状態: ''（未送信または送信済み）/ sending / none / net / passcode / server
     live: { nowAt: 0, chunkFrom: 0, busy: false, joinAt: 0, ok: null, err: '', sent: 0 },   // リアルタイムの送信の状態
     map: null            // リアルタイムモードの地図（初めて開いたときに作る）
@@ -113,6 +116,7 @@
     if (spd !== null) st.lastSpeed = spd;
     st.fixes.push([tms, round(c.latitude, 6), round(c.longitude, 6), round(c.accuracy, 1), spd, hdg]);
     if (st.map) st.map.setSelf([tms, c.latitude, c.longitude]);
+    if (st.nav) st.nav.setSelf([tms, c.latitude, c.longitude]);
     flush(false);
     render();
   }
@@ -171,6 +175,7 @@
     $('opsStartBox').hidden = !st.meta.ops;
     $('btnFin').hidden = !st.meta.ops;
     $('sessionNote').hidden = !st.meta.practice;
+    renderPlan();
     $('btnLive').hidden = !cloudOn;
     $('liveNote').hidden = !cloudOn;
     st.live = { nowAt: 0, chunkFrom: 0, busy: false, joinAt: 0, ok: null, err: '', sent: 0 };
@@ -216,7 +221,15 @@
     if (!st.meta || !(st.meta.ops || st.meta.practice)) { el.hidden = true; return; }
     var m1 = markAt('m1'), m4 = markAt('m4'), fin = st.meta.ops ? markAt('fin') : null, lines = [];
     function d(a, b) { return Math.round(haversine(a[0], a[1], b[0], b[1])) + 'm'; }
-    if (m1 && m4) lines.push('上マーク〜下マーク: ' + d([m1[2], m1[3]], [m4[2], m4[3]]));
+    if (m1 && m4) {
+      // 打ち終えたあとの実際のコース: 距離と、下マークから上マークを見た角度（コンパスの読み）
+      var ang = axisAngle(m4, m1), txt = '上マーク〜下マーク: ' + d([m1[2], m1[3]], [m4[2], m4[3]]);
+      if (ang !== null) {
+        var off = Math.round(GEO.norm180(ang - plan().wind));
+        txt += '・角度 ' + ang + '°（風軸 ' + plan().wind + '° ' + (off === 0 ? 'のとおり' : 'から ' + (off > 0 ? '+' : '') + off + '°') + '）';
+      }
+      lines.push(txt);
+    }
     var f = st.fixes[st.fixes.length - 1];
     if (f) {
       var here = [f[1], f[2]];
@@ -230,7 +243,237 @@
   function addMark(ev) {
     st.meta.marks.push(ev);
     store.set(META, st.meta);
+    st.navSel = null;      // 打ったら、次の目標を選び直す
     renderOps();
+    renderPlan();
+  }
+
+  // ---------- コース設定ナビ（最初に打ったマークと、風軸・距離から、残りのマークの目標位置を出す） ----------
+  var GEO = window.RT && window.RT.geo;
+  var PLAN_DEFAULT = { wind: 200, dist: 600, line: 100 };
+  var PLAN_LIMIT = { wind: [0, 359], dist: [50, 3000], line: [10, 500] };
+  var FIN_LEN = 50;        // フィニッシュラインの長さの目安 m
+  var ARRIVE_M = 10;       // 目標のこの距離以内に入ったら「到着」とする（GPS の誤差が5mほどあるため）
+  var TARGET_NAMES = { m1: '上マーク', m4: '下マーク', cb: '本部船の位置', fin: 'フィニッシュマーク' };
+
+  function plan() {
+    if (!st.meta.plan) st.meta.plan = Object.assign({}, PLAN_DEFAULT, (store.get(PROFILE) || {}).plan);
+    return st.meta.plan;
+  }
+  function setPlan(key, value) {
+    var lim = PLAN_LIMIT[key], v = Math.round(Number(value));
+    if (!isFinite(v)) return;
+    if (key === 'wind') v = ((v % 360) + 360) % 360;
+    v = Math.max(lim[0], Math.min(lim[1], v));
+    plan()[key] = v;
+    store.set(META, st.meta);
+    var prof = store.get(PROFILE) || {};
+    prof.plan = st.meta.plan;
+    store.set(PROFILE, prof);
+    renderPlan();
+    renderDist();
+  }
+  /* 下マークから上マークを見た角度（コンパスの読み、度）。計算の部品が無ければ null。 */
+  function axisAngle(from, to) {
+    if (!GEO) return null;
+    var proj = GEO.projection(from[2], from[3]);
+    var brg = GEO.bearing({ x: 0, y: 0 }, proj.toXY(to[2], to[3]));
+    return Math.round(GEO.norm360(brg + GEO.declinationWest(from[2], from[3]))) % 360;
+  }
+  /* 目標位置の計算。基準は下マーク（打ってあれば実際の位置、まだなら上マークから風下へ取った目標）。
+   *   上マークの目標 = 下マークから風上へ「上下の距離」
+   *   本部船の目標   = 下マークから、風上に向かって右へ「スタートラインの長さ」（運営艇のみ）
+   *   フィニッシュマークの目標 = 本部船の風下側（運営艇のみ）
+   * 戻り値の targets は [{ key, name, lat, lon, x, y, placed: 打った位置 | null, dev: 目標とのずれ m | null }]。 */
+  function planCalc() {
+    if (!GEO || !st.meta) return null;
+    var m1 = markAt('m1'), m4 = markAt('m4'), fin = st.meta.ops ? markAt('fin') : null;
+    var anchor = m4 || m1;
+    if (!anchor) return null;
+    var pl = plan(), proj = GEO.projection(anchor[2], anchor[3]);
+    var decl = GEO.declinationWest(anchor[2], anchor[3]), wt = GEO.norm360(pl.wind - decl);
+    function xy(m) { return m ? proj.toXY(m[2], m[3]) : null; }
+    var p1 = xy(m1), p4 = xy(m4), targets = [];
+    var low = p4 || GEO.offset(p1, wt + 180, pl.dist);          // 下マークの位置（実際、または目標）
+    function add(key, p, placed) {
+      var q = proj.toLatLon(p), pp = xy(placed);
+      targets.push({ key: key, name: TARGET_NAMES[key], lat: q.lat, lon: q.lon, x: p.x, y: p.y,
+        placed: placed || null, dev: pp ? GEO.dist(pp, p) : null });
+    }
+    if (!m4) add('m4', low, null);
+    if (m4) add('m1', GEO.offset(low, wt, pl.dist), m1);
+    if (st.meta.ops) {
+      var cb = GEO.offset(low, wt + 90, pl.line);
+      var started = null;
+      validStarts().forEach(function (s) { if (s[2] !== null) started = s; });
+      add('cb', cb, started);
+      var ang = Math.asin(Math.min(1, FIN_LEN / (2 * pl.line))) * 180 / Math.PI;
+      add('fin', GEO.offset(cb, wt + 180 + ang, FIN_LEN), fin);
+    }
+    return { proj: proj, decl: decl, windTrue: wt, targets: targets, m1: m1, m4: m4, fin: fin };
+  }
+  /* いまの位置から目標までの、距離・方位と、風軸に沿った成分（風上へ何m・右へ何m） */
+  function guideTo(calc, t) {
+    var f = st.fixes[st.fixes.length - 1];
+    if (!f) return null;
+    var here = calc.proj.toXY(f[1], f[2]), v = { x: t.x - here.x, y: t.y - here.y };
+    var up = GEO.vec(calc.windTrue), right = GEO.vec(calc.windTrue + 90);
+    return {
+      dist: Math.hypot(v.x, v.y),
+      brg: Math.round(GEO.norm360(GEO.bearing(here, t) + calc.decl)) % 360,
+      along: v.x * up.x + v.y * up.y,
+      cross: v.x * right.x + v.y * right.y
+    };
+  }
+  /* ナビで案内する目標。まだ打っていないもののうち、最初のもの（「次の目標へ」で切り替えられる）。 */
+  function navTarget(calc) {
+    var open = calc.targets.filter(function (t) { return !t.placed; });
+    var list = open.length ? open : calc.targets;
+    var sel = null;
+    list.forEach(function (t) { if (t.key === st.navSel) sel = t; });
+    return sel || list[0] || null;
+  }
+
+  /* 設定の欄と、目標までの距離の一覧を書き直す。ナビ画面が開いていれば、そちらも書き直す。 */
+  function renderPlan() {
+    var on = !!st.meta && (st.meta.ops || st.meta.practice) && !!GEO;
+    $('planBox').hidden = !on;
+    if (!on) return;
+    var pl = plan();
+    [['plWind', 'wind'], ['plDist', 'dist'], ['plLine', 'line']].forEach(function (p) {
+      if (document.activeElement !== $(p[0])) $(p[0]).value = pl[p[1]];
+    });
+    $('plLineRow').hidden = !st.meta.ops;
+    var calc = planCalc(), info = $('planInfo'), lines = [];
+    if (!calc) {
+      lines.push('上マークか下マークを打つと、もう一方の目標位置が出ます。');
+    } else {
+      calc.targets.forEach(function (t) {
+        if (t.placed) { lines.push(t.name + ': 目標とのずれ ' + Math.round(t.dev) + 'm'); return; }
+        var g = guideTo(calc, t);
+        lines.push(t.name + 'の目標まで: ' + (g ? Math.round(g.dist) + 'm・方位 ' + g.brg + '°' : '位置を取得中'));
+      });
+    }
+    info.textContent = lines.join('\n');
+    info.hidden = false;
+    $('btnNav').disabled = !calc;
+    renderNav(calc);
+  }
+
+  // ---------- ナビ画面（地図に、目標のマーク位置と自分の位置を出す） ----------
+  function latlon(m) { return m ? { lat: m[2], lon: m[3] } : null; }
+  function renderNav(calc) {
+    if ($('navView').hidden) return;
+    if (!calc) { leaveNav(); return; }
+    var t = navTarget(calc), g = t ? guideTo(calc, t) : null;
+    var top = document.querySelector('.nv-top');
+    $('nvName').textContent = t ? '目標: ' + t.name + (t.placed ? '（打ってあります。目標とのずれ ' + Math.round(t.dev) + 'm）' : '') : '';
+    $('nvDist').textContent = g ? Math.round(g.dist) + 'm' : '–';
+    $('nvBrg').textContent = g ? '方位 ' + g.brg + '°' : '位置を取得中';
+    $('nvAlong').textContent = g ? (g.along >= 0 ? '風上へ ' : '風下へ ') + Math.round(Math.abs(g.along)) + 'm' : '';
+    $('nvCross').textContent = g ? (g.cross >= 0 ? '右へ ' : '左へ ') + Math.round(Math.abs(g.cross)) + 'm' : '';
+    var arrived = !!g && g.dist <= ARRIVE_M;
+    top.classList.toggle('arrived', arrived);
+    if (arrived && st.navArrived !== t.key) {
+      // 到着の合図（短い音を2回）
+      st.navArrived = t.key;
+      var ctx = soundContext();
+      if (ctx) { beepAt(ctx, ctx.currentTime + 0.02, 0.18, 1040); beepAt(ctx, ctx.currentTime + 0.3, 0.18, 1040); }
+    } else if (g && g.dist > ARRIVE_M * 2.5 && st.navArrived === (t && t.key)) {
+      st.navArrived = null;
+    }
+    var drop = $('nvDrop'), type = t && t.key !== 'cb' ? t.key : null;
+    drop.hidden = !type;
+    if (type && !drop.classList.contains('armed')) drop.textContent = TARGET_NAMES[type] + 'を打った';
+    $('nvNext').disabled = calc.targets.length < 2;
+    if (st.nav) {
+      st.nav.setPlan({
+        upTrue: calc.windTrue,
+        marks: { m1: latlon(calc.m1), m4: latlon(calc.m4), fin: latlon(calc.fin) },
+        targets: calc.targets.filter(function (x) { return !x.placed; }).map(function (x) { return { key: x.key, name: x.name + '（目標）', lat: x.lat, lon: x.lon }; }),
+        selected: t ? { key: t.key, lat: t.lat, lon: t.lon } : null
+      });
+    }
+  }
+  function enterNav() {
+    if (!planCalc() || !window.RT || !RT.livemap) return;
+    leaveDark();
+    leaveLive();
+    soundContext();     // 到着の合図を鳴らせるよう、ボタンを押した操作の中で音の準備をしておく
+    st.navArrived = null;
+    $('navView').hidden = false;
+    logEvent('nav-on');
+    renderPlan();
+    RT.livemap.loadLeaflet().then(function () {
+      if ($('navView').hidden) return;
+      if (!st.nav) st.nav = RT.livemap.create($('navMap'), { selfId: 'me', interactive: false, local: true });
+      st.nav.setSelfHistory(st.fixes.slice(-600).map(function (f) { return [f[0], f[1], f[2]]; }));
+      st.nav.start();
+      renderPlan();
+      st.nav.refit();
+    }).catch(function () { /* 地図が出なくても、距離と方位の数字で案内できる */ });
+  }
+  function leaveNav() {
+    if ($('navView').hidden) return;
+    $('navView').hidden = true;
+    if (st.nav) st.nav.stop();
+    logEvent('nav-off');
+  }
+  function bindPlan() {
+    [['plWind', 'wind'], ['plDist', 'dist'], ['plLine', 'line']].forEach(function (p) {
+      $(p[0]).addEventListener('change', function () { setPlan(p[1], this.value); });
+    });
+    Array.prototype.forEach.call(document.querySelectorAll('[data-plan]'), function (b) {
+      b.addEventListener('click', function () {
+        var key = b.getAttribute('data-plan');
+        setPlan(key, plan()[key] + parseInt(b.getAttribute('data-step'), 10));
+      });
+    });
+    $('plCog').addEventListener('click', function () {
+      // 直近5秒ほどの動きから進行方向を出す。5m以上動いていなければ、向きが定まらないので使わない
+      var n = st.fixes.length, b = st.fixes[n - 1], a = null;
+      for (var i = n - 2; i >= 0 && b[0] - st.fixes[i][0] <= 6000; i--) a = st.fixes[i];
+      var s = $('vStatus');
+      if (!GEO || !a || haversine(a[1], a[2], b[1], b[2]) < 5) {
+        s.textContent = '進行方向が分かりません。風上に向かって走りながら押してください。';
+        s.className = 'status bad';
+        return;
+      }
+      var ang = axisAngle([0, '', a[1], a[2]], [0, '', b[1], b[2]]);   // 位置の並びを、マークの記録と同じ形にそろえて渡す
+      setPlan('wind', ang);
+      s.textContent = '風軸を ' + ang + '° にしました。';
+      s.className = 'status good';
+    });
+    $('btnNav').addEventListener('click', enterNav);
+    $('nvClose').addEventListener('click', leaveNav);
+    $('nvNext').addEventListener('click', function () {
+      var calc = planCalc();
+      if (!calc) return;
+      var open = calc.targets.filter(function (t) { return !t.placed; });
+      var list = open.length ? open : calc.targets, cur = navTarget(calc), i = list.indexOf(cur);
+      st.navSel = list[(i + 1) % list.length].key;
+      st.navArrived = null;
+      renderPlan();
+    });
+    // ナビ画面からマークを打つ。1回目で位置を覚え、2回目で確定する（ほかのボタンと同じ）
+    var pending = null, timer = null, drop = $('nvDrop');
+    function disarm() { clearTimeout(timer); drop.classList.remove('armed'); pending = null; }
+    drop.addEventListener('click', function () {
+      var calc = planCalc(), t = calc && navTarget(calc);
+      if (!t || t.key === 'cb') return;
+      if (drop.classList.contains('armed') && pending) {
+        var ev = pending;
+        disarm();
+        addMark(ev);
+        return;
+      }
+      pending = snapshot(t.key);
+      if (!pending) return;
+      drop.classList.add('armed');
+      drop.textContent = 'もう一度押すと、この位置で確定します';
+      timer = setTimeout(function () { disarm(); renderPlan(); }, 5000);
+    });
+    $('navView').addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
   }
   /* 取り消されていないスタートの一覧 */
   function validStarts() {
@@ -381,7 +624,9 @@
     var needJoin = pub && !cloud.joined();
     if (needJoin && !pass) { fail('合言葉を入力してください。公開しないときは、チェックを外してください。'); return; }
     err.hidden = true;
-    store.set(PROFILE, { sail: sail, name: name, mode: mode, pub: pub, laps: (store.get(PROFILE) || {}).laps || 2 });
+    // 周回数とコース設定ナビの値は、前回のものを引き継ぐ
+    var keep = store.get(PROFILE) || {};
+    store.set(PROFILE, { sail: sail, name: name, mode: mode, pub: pub, laps: keep.laps || 2, plan: keep.plan });
 
     function go() {
       st.meta = {
@@ -437,6 +682,7 @@
     store.set(META, st.meta);
     leaveDark();
     leaveLive();
+    leaveNav();
     showDone();
     sendNow();
   }
@@ -484,6 +730,7 @@
   function enterLive() {
     if (!cloudOn || !window.RT || !RT.livemap) return;
     leaveDark();
+    leaveNav();
     $('liveView').hidden = false;
     logEvent('live-on');
     $('lCount').textContent = '地図を読み込んでいます…';
@@ -630,7 +877,7 @@
     if (!st.meta) return;
     if (st.meta.ops && st.recording) { tickOps(); if (st.meta.seq) renderOps(); }
     liveTick();
-    if (st.recording && (st.meta.ops || st.meta.practice)) renderDist();   // 動くと、マークまでの距離が変わる
+    if (st.recording && (st.meta.ops || st.meta.practice)) { renderDist(); renderPlan(); }   // 動くと、マークや目標までの距離が変わる
     var elapsed = fmtDuration((Date.now() - st.meta.started) / 1000);
     $('vElapsed').textContent = elapsed;
     $('vCount').textContent = st.fixes.length;
@@ -650,7 +897,7 @@
   }
 
   // ---------- 航海モード（黒い画面・タッチ無効） ----------
-  function enterDark() { leaveLive(); $('dark').hidden = false; logEvent('dark-on'); }
+  function enterDark() { leaveLive(); leaveNav(); $('dark').hidden = false; logEvent('dark-on'); }
   function leaveDark() {
     if ($('dark').hidden) return;
     $('dark').hidden = true;
@@ -860,6 +1107,7 @@
     twoStep($('btnNew'), 'もう一度押すと記録を消します', reset);
     bindDark();
     bindOps();
+    bindPlan();
 
     document.addEventListener('visibilitychange', function () {
       if (!st.recording) return;
