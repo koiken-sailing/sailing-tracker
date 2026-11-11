@@ -91,6 +91,8 @@
     return fixes;
   }
 
+  function validLaps(v) { return typeof v === 'number' && v >= 1 && v <= 9 && Math.floor(v) === v; }
+
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function dayOf(ms) {
     var d = new Date(ms);
@@ -120,7 +122,9 @@
     (Array.isArray(file.marks) ? file.marks : []).forEach(function (m) {
       if (!Array.isArray(m) || !MARK_TYPES[m[1]] || !isFinite(m[0])) return;
       var okPos = m[2] !== null && m[3] !== null && isFinite(m[2]) && isFinite(m[3]) && inArea(m[2], m[3]);
-      marks.push(okPos ? [m[0], m[1], m[2], m[3]] : [m[0], m[1], null, null]);
+      var out = okPos ? [m[0], m[1], m[2], m[3]] : [m[0], m[1], null, null];
+      if (m[1] === 'start' && validLaps(m[6])) out.push(m[6]);    // スタートには周回数を付ける
+      marks.push(out);
     });
     var first = inside[0][0], last = inside[inside.length - 1][0];
     return {
@@ -144,7 +148,9 @@
     var marks = [];
     try {
       (JSON.parse(rec.m || '[]') || []).forEach(function (m) {
-        if (Array.isArray(m) && MARK_TYPES[m[1]]) marks.push([Number(m[0]), m[1], m[2], m[3]]);
+        if (!Array.isArray(m) || !MARK_TYPES[m[1]]) return;
+        // 記録ファイルと同じ並び（時刻, 種類, 緯度, 経度, 精度, 位置の古さ, 周回数）に戻す
+        marks.push([Number(m[0]), m[1], m[2], m[3], null, null, validLaps(m[4]) ? m[4] : null]);
       });
     } catch (e) { marks = []; }
     return {

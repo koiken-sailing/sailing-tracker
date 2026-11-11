@@ -175,6 +175,12 @@
     if (!f) return null;
     return [atMs || Date.now(), type, f[1], f[2], f[3], Math.max(0, Date.now() - f[0])];
   }
+  /* スタートの記録を1件作る。位置が取れていなくても、時刻と周回数は残す。 */
+  function startMark(atMs) {
+    var m = snapshot('start', atMs) || [atMs, 'start', null, null, null, null];
+    m[6] = st.meta.laps || 2;
+    return m;
+  }
   function addMark(ev) {
     st.meta.marks.push(ev);
     store.set(META, st.meta);
@@ -205,7 +211,7 @@
     if (!st.meta || !st.meta.ops || !st.meta.seq || Date.now() < st.meta.seq) return;
     var at = st.meta.seq;
     st.meta.seq = null;
-    addMark(snapshot('start', at) || [at, 'start', null, null, null, null]);
+    addMark(startMark(at));
   }
   function seqLabel(leftMs) {
     if (leftMs > 240000) return '予告信号（クラス旗 掲揚）';
@@ -228,10 +234,11 @@
     list.textContent = '';
     starts.forEach(function (m, i) {
       var li = document.createElement('li');
-      li.textContent = '第' + (i + 1) + 'レース　' + clock(m[0]) + ' スタート';
+      li.textContent = '第' + (i + 1) + 'レース　' + clock(m[0]) + ' スタート' + (m[6] ? '（' + m[6] + '周）' : '');
       list.appendChild(li);
     });
     $('btnStartCancel').hidden = starts.length === 0;
+    $('opsLaps').value = String(st.meta.laps || 2);
     var cd = $('opsCountdown'), seq = st.meta.seq;
     cd.hidden = !seq;
     $('btnSeq').textContent = seq ? 'スタート手順を取り消す（延期）' : 'スタート手順を開始（5分前）';
@@ -260,7 +267,7 @@
     var needJoin = pub && !cloud.joined();
     if (needJoin && !pass) { fail('合言葉を入力してください。公開しないときは、チェックを外してください。'); return; }
     err.hidden = true;
-    store.set(PROFILE, { sail: sail, name: name, ops: ops, pub: pub });
+    store.set(PROFILE, { sail: sail, name: name, ops: ops, pub: pub, laps: (store.get(PROFILE) || {}).laps || 2 });
 
     function go() {
       st.meta = {
@@ -268,6 +275,7 @@
         ops: ops,      // 運営艇として記録しているか
         marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
         seq: null,     // スタート手順の進行中なら、予定しているスタート時刻
+        laps: (store.get(PROFILE) || {}).laps || 2,   // 次のスタートの周回数（前回の値を引き継ぐ）
         pub: pub,      // 記録を終えたら観戦ページに送るか
         cid: pub ? cloud.newId() : null,   // 送るときの記録ID
         sent: null     // 送り終えたら { day, n, outside, at }
@@ -476,7 +484,8 @@
       fixes: st.fixes,
       // 運営艇の記録。種類は m1=上マーク, m4=下マーク, fin=フィニッシュマーク, start=スタート信号, start-cancel=直前のスタートの取り消し
       ops: !!st.meta.ops,
-      mark_columns: ['time_ms', 'type', 'lat', 'lon', 'accuracy_m', 'fix_age_ms'],
+      // laps はスタートの記録にだけ入る（そのレースの周回数）
+      mark_columns: ['time_ms', 'type', 'lat', 'lon', 'accuracy_m', 'fix_age_ms', 'laps'],
       marks: st.meta.marks || [],
       log: st.meta.log
     };
@@ -557,14 +566,22 @@
       if (pendingStart) { st.meta.seq = null; addMark(pendingStart); }
       pendingStart = null;
     }, function () {
-      var now = Date.now();
-      pendingStart = snapshot('start', now) || [now, 'start', null, null, null, null];
+      pendingStart = startMark(Date.now());
     });
     twoStep($('btnStartCancel'), 'もう一度押すと、直前のスタートを取り消します', function () {
       addMark([Date.now(), 'start-cancel', null, null, null, null]);
     });
     $('btnSeq').addEventListener('click', function () {
       if (st.meta.seq) cancelSequence(); else startSequence();
+    });
+    $('opsLaps').addEventListener('change', function () {
+      var v = parseInt(this.value, 10);
+      if (!st.meta || !(v >= 1 && v <= 4)) return;
+      st.meta.laps = v;
+      store.set(META, st.meta);
+      var prof = store.get(PROFILE) || {};
+      prof.laps = v;
+      store.set(PROFILE, prof);
     });
   }
 
@@ -573,6 +590,7 @@
     var meta = store.get(META);
     if (!meta) return false;
     if (!Array.isArray(meta.marks)) meta.marks = [];   // 運営艇モードができる前の記録
+    if (!meta.laps) meta.laps = 2;
     st.meta = meta;
     st.fixes = [];
     for (var i = 0; i < meta.chunks; i++) {

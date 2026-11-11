@@ -182,6 +182,7 @@
     if (imported && sim) {
       // 読み込んだ航跡は、コースの外まで広がっていることがあるので、航跡も収まるようにする
       sim.boats.forEach(function (b) {
+        if (b.none) return;
         for (var k = b.from; k <= b.to; k += 10) pts.push({ x: b.x[k], y: b.y[k] });
         pts.push({ x: b.x[b.to], y: b.y[b.to] });
       });
@@ -329,7 +330,9 @@
   function rebuild(keepTime) {
     course = RT.course.build(curParams(), curOverrides());
     if (imported) {
-      sim = RT.importer.build(imported.racers, course, imported.startMs);
+      // 運営艇がスタートを記録している日は、選んだレースの時間帯だけを取り出す
+      sim = RT.importer.build(imported.racers, course, imported.startMs,
+        RT.importer.raceWindow(imported.starts, imported.startMs));
       fleet = imported.racers.map(function (tr) {
         return { sail: tr.sail || '—', name: tr.name || tr.sail || '名前なし' };
       });
@@ -404,7 +407,7 @@
       // 読み込んだ航跡は、艇ごとに記録のある範囲（kLo〜kHi）が違う。範囲の外ではマーカーを隠す。
       var bt = sim.boats[i];
       var kLo = bt.from === undefined ? 0 : bt.from, kHi = bt.to === undefined ? sim.n - 1 : bt.to;
-      var has = s.k >= kLo && s.k <= kHi;
+      var has = !bt.none && s.k >= kLo && s.k <= kHi;
       if (markers[i].shown !== has) { markers[i].shown = has; markers[i].marker.setOpacity(has ? 1 : 0); }
       markers[i].marker.setLatLng(pos);
       markers[i].svg.style.transform = 'rotate(' + (s.hdg - up).toFixed(1) + 'deg)';
@@ -429,7 +432,7 @@
         }
         a0 = Math.max(a0, kLo, 0);
         b0 = Math.min(b0, kHi);
-        var pts = b0 >= a0 ? ll[i].slice(a0, b0 + 1) : [];
+        var pts = b0 >= a0 && !bt.none ? ll[i].slice(a0, b0 + 1) : [];
         if (pts.length && b0 === s.k && has) pts.push(pos);
         trails[i].setLatLngs(pts);
       }
@@ -947,10 +950,20 @@
   /* 1日に複数レースある記録で、見るレースを切り替える */
   function chooseRace(idx) {
     if (!imported || imported.starts[idx] === undefined) return;
+    var prev = { startMs: imported.startMs, relocate: imported.relocate, overrides: imported.overrides };
     imported.startMs = imported.starts[idx];
     var oc = RT.importer.opsCourse(imported.tracks, imported.startMs);
     if (oc) { imported.relocate = oc.relocate; imported.overrides = oc.overrides; }
-    rebuild(false);
+    try {
+      rebuild(false);
+    } catch (e) {
+      // そのレースの時間帯に選手の記録が無いときなどは、元のレースに戻す
+      imported.startMs = prev.startMs; imported.relocate = prev.relocate; imported.overrides = prev.overrides;
+      rebuild(false);
+      renderData();
+      toast(e.message);
+      return;
+    }
     t = clamp(0, sim.t0, sim.tEnd);
     dirty = true;
     setPlaying(false);
@@ -1068,7 +1081,8 @@
     $('raceRow').hidden = imported.starts.length === 0;
     raceSel.textContent = '';
     imported.starts.forEach(function (ms, i) {
-      var opt = el('option', null, '第' + (i + 1) + 'レース（' + clockOfDay(ms) + ' スタート）');
+      var laps = RT.importer.lapsAt(imported.tracks, ms);
+      var opt = el('option', null, '第' + (i + 1) + 'レース（' + clockOfDay(ms) + ' スタート' + (laps ? '・' + laps + '周' : '') + '）');
       opt.value = i;
       raceSel.appendChild(opt);
     });

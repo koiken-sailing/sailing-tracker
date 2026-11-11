@@ -12,6 +12,7 @@
   var MIN_MOVE = 0.4;        // これより遅いときは針路を更新しない m/s
   var MAX_HOURS = 12;
   var MARK_TYPES = { m1: 1, m4: 1, fin: 1, start: 1, 'start-cancel': 1 };
+  var PRE_MS = 6 * 60 * 1000;   // レースの表示は、スタートの6分前から（5分前の予告信号が入るように）
 
   function median(arr) {
     if (!arr.length) return null;
@@ -50,7 +51,9 @@
       var mlat = m[2] === null || m[2] === undefined ? null : Number(m[2]);
       var mlon = m[3] === null || m[3] === undefined ? null : Number(m[3]);
       if (mlat === null || mlon === null || !isFinite(mlat) || !isFinite(mlon)) { mlat = null; mlon = null; }
-      marks.push({ t: mt, type: m[1], lat: mlat, lon: mlon });
+      var laps = Number(m[6]);
+      if (!(laps >= 1 && laps <= 9 && Math.floor(laps) === laps)) laps = null;
+      marks.push({ t: mt, type: m[1], lat: mlat, lon: mlon, laps: m[1] === 'start' ? laps : null });
     });
     marks.sort(function (a, b) { return a.t - b.t; });
 
@@ -105,17 +108,24 @@
     var to = Math.floor((fx[last].t - startMs) / 1000) - t0;
     return {
       t0: t0, dt: 1, x: x, y: y, hdg: hdg, spd: spd,
+      none: from >= n - 1 || to <= 0,             // この時間帯には、その艇の記録がない（端の1点だけの場合も含む）
       from: Math.max(0, Math.min(n - 1, from)),   // この範囲の外は、その艇の記録がない
       to: Math.max(0, Math.min(n - 1, to))
     };
   }
 
   /* 読み込んだ航跡（parse の結果の配列）から、観戦画面用のデータを作る。
-   * startMs はスタート信号の時刻（1970年からのミリ秒）。 */
-  function build(tracks, course, startMs) {
+   * startMs はスタート信号の時刻（1970年からのミリ秒）。
+   * win = { fromMs, toMs } を渡すと、その時間帯だけを取り出す（1日に複数レースある日の、1レース分）。 */
+  function build(tracks, course, startMs, win) {
     if (!tracks.length) throw new Error('航跡がありません');
     var first = Infinity, last = -Infinity;
     tracks.forEach(function (tr) { first = Math.min(first, tr.first); last = Math.max(last, tr.last); });
+    if (win) {
+      first = Math.max(first, win.fromMs);
+      last = Math.min(last, win.toMs);
+      if (!(last > first)) throw new Error('このレースの時間帯に、航跡の記録がありません');
+    }
     var t0 = Math.floor((first - startMs) / 1000);
     var tEnd = Math.ceil((last - startMs) / 1000);
     if (tEnd - t0 > MAX_HOURS * 3600) throw new Error('記録の時間幅が長すぎます（' + MAX_HOURS + '時間まで）');
@@ -157,10 +167,30 @@
     return out;
   }
 
+  /* あるレースとして見せる時間帯。スタートの6分前から、次のレースのスタートの6分前まで。
+   * 次のレースが無ければ、記録の最後まで。運営艇が記録したスタートでなければ null（＝全体を見せる）。
+   * こうしておくと、途中でやめた艇の「次のレースでの動き」が、前のレースの続きとして数えられない。 */
+  function raceWindow(startList, startMs) {
+    var i = startList.indexOf(startMs);
+    if (i < 0) return null;
+    return {
+      fromMs: startMs - PRE_MS,
+      toMs: i + 1 < startList.length ? startList[i + 1] - PRE_MS : Infinity
+    };
+  }
+
+  /* そのスタートと一緒に運営艇が記録した周回数。記録が無ければ null。 */
+  function lapsAt(tracks, startMs) {
+    var laps = null;
+    allMarks(tracks).forEach(function (m) { if (m.type === 'start' && m.t === startMs && m.laps) laps = m.laps; });
+    return laps;
+  }
+
   /* 運営艇の記録から、あるスタート時刻のレースのコースを組み立てる。運営艇の記録が無ければ null。
    *   各マーク: そのスタート以前で最後に打った位置（無ければ、その後で最初に打った位置）
    *   本部船:   スタート信号を押した位置（無ければ、その時刻の運営艇の位置）
    *   風軸:     下マークから上マークを見た方位（両方あるとき）
+   *   周回数:   そのスタートと一緒に記録された値（あるとき）
    * 戻り値の relocate はコース設定への上書き、overrides は実際に打ったマークの位置。 */
   function opsCourse(tracks, startMs) {
     var opsTracks = tracks.filter(function (tr) { return tr.ops; });
@@ -191,11 +221,14 @@
       var brg = G.bearing({ x: 0, y: 0 }, proj.toXY(overrides.m1.lat, overrides.m1.lon));
       relocate.windMag = Math.round(G.norm360(brg + G.declinationWest(cb.lat, cb.lon))) % 360;
     }
+    var laps = lapsAt(opsTracks, startMs);
+    if (laps) relocate.laps = laps;
     return { relocate: relocate, overrides: overrides, found: found };
   }
 
   RT.importer = {
     parse: parse, build: build, MAX_ACC: MAX_ACC,
-    starts: starts, opsCourse: opsCourse, positionAt: positionAt
+    starts: starts, opsCourse: opsCourse, positionAt: positionAt,
+    raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -70,12 +70,20 @@
       <ul class="ops-list" id="opsMarks"></ul>
 
       <h2>スタート</h2>
+      <label class="pick">周回数
+        <select id="opsLaps">
+          <option value="1">1周</option>
+          <option value="2">2周</option>
+          <option value="3">3周</option>
+          <option value="4">4周</option>
+        </select>
+      </label>
       <p class="countdown" id="opsCountdown" hidden></p>
       <button class="btn primary" id="btnSeq" type="button">スタート手順を開始（5分前）</button>
       <button class="btn" id="btnStartNow" type="button">いまスタート信号を出した</button>
       <button class="btn quiet" id="btnStartCancel" type="button" hidden>直前のスタートを取り消す</button>
       <ul class="ops-list" id="opsStarts"></ul>
-      <p class="note">スタート信号の瞬間の、このスマホの位置を本部船の位置として記録します。</p>
+      <p class="note">スタート信号の瞬間の、このスマホの位置を本部船の位置として記録します。周回数も、そのスタートと一緒に記録します。</p>
     </div>
 
     <button class="btn primary" id="btnDark" type="button">航海モードにする</button>

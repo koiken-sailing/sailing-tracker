@@ -105,6 +105,9 @@ body {
 .countdown b { display: block; font-size: 40px; line-height: 1.1; font-variant-numeric: tabular-nums; }
 .countdown span { display: block; font-size: 14px; color: #b9c8da; }
 
+.pick { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; font-weight: 600; }
+.pick select { height: 48px; min-width: 120px; padding: 0 10px; border: 1px solid #c5ced8; border-radius: 8px; background: #fff; font: inherit; font-size: 18px; }
+
 /* 観戦ページへの送信 */
 .send { margin: 0 0 14px; padding: 12px 14px 2px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
 .send .status { margin-bottom: 12px; }

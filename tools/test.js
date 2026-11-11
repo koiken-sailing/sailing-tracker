@@ -405,6 +405,95 @@ const SQUARE = [[34.70, 135.30], [34.70, 135.35], [34.66, 135.35], [34.66, 135.3
   ok(ids.size === 200 && [...ids].every(id => /^[A-Za-z0-9]{12}$/.test(id)), '記録IDは重ならない英数字12文字');
 }
 
+// ---- 8. 1日に複数レースある日（周回数の記録と、レースの区切り） ----
+console.log('8. 1日に複数レース');
+{
+  /* 第1レースは1周、第2レースは2周。艇3は第1レースを上マークのあとでやめ、第2レースには出る。
+   * 艇4は第2レースからの参加。記録は1日を通して1本で、送信（詰める → 戻す）を通してから読み込む。 */
+  const base = Object.assign({}, RT.course.DEFAULTS, { lat: 34.685, lon: 135.32, windMag: 200, d14: 500 });
+  const cA = RT.course.build(Object.assign({}, base, { laps: 1 }), {});
+  const cB = RT.course.build(Object.assign({}, base, { laps: 2 }), {});
+  const simA = RT.sim.run(cA, { n: 4, seed: 5 }), simB = RT.sim.run(cB, { n: 5, seed: 8 });
+  const gA = RT.race.gates(cA), gB = RT.race.gates(cB);
+  const evA = RT.race.analyze(gA, simA.boats), evB = RT.race.analyze(gB, simB.boats);
+  const T1 = new Date(2026, 10, 15, 10, 0, 0).getTime();
+  const T2 = T1 + (simA.tEnd + 900) * 1000;
+  const fixesOf = (c, sim, b, T, kMax) => {
+    const out = [];
+    for (let k = 0; k < Math.min(sim.n, kMax === undefined ? Infinity : kMax); k++) {
+      const q = c.latLon({ x: b.x[k], y: b.y[k] });
+      out.push([T + (sim.t0 + k) * 1000, q.lat, q.lon, 5, b.spd[k], b.hdg[k]]);
+    }
+    return out;
+  };
+  const viaCloud = file => RT.importer.parse(JSON.stringify(C.unpack(C.pack(file).rec)), file.sail);
+  const quitAt = Math.ceil(evA[3][1] - simA.t0) + 30;      // 艇3: 上マークを回って30秒後に記録が途切れる
+  const racers = [0, 1, 2, 3, 4].map(i => {
+    const first = i === 4 ? [] : fixesOf(cA, simA, simA.boats[i], T1, i === 3 ? quitAt : undefined);
+    return viaCloud({ sail: String(200 + i), name: '艇' + i, ops: false, marks: [], fixes: first.concat(fixesOf(cB, simB, simB.boats[i], T2)) });
+  });
+  const cb = cA.latLon(cA.cb), m1 = cA.latLon(cA.marks.m1), m4 = cA.latLon(cA.marks.m4), fin = cA.latLon(cA.marks.fin);
+  const opsFixes = [];
+  for (let ms = T1 - 1500000; ms <= T2 + (simB.tEnd + 60) * 1000; ms += 5000) opsFixes.push([ms, cb.lat, cb.lon, 4, 0, null]);
+  const ops = viaCloud({
+    sail: 'RC', name: '本部船', ops: true, fixes: opsFixes,
+    marks: [
+      [T1 - 1200000, 'm1', m1.lat, m1.lon, 5, 300], [T1 - 900000, 'm4', m4.lat, m4.lon, 5, 300], [T1 - 700000, 'fin', fin.lat, fin.lon, 5, 300],
+      [T1, 'start', cb.lat, cb.lon, 4, 200, 1],
+      [T2 - 400000, 'start', cb.lat, cb.lon, 4, 200, 2], [T2 - 390000, 'start-cancel', null, null, null, null],
+      [T2, 'start', cb.lat, cb.lon, 4, 200, 2]
+    ]
+  });
+  const all = racers.concat([ops]);
+  const st = RT.importer.starts(all);
+  ok(st.length === 2 && st[0] === T1 && st[1] === T2, 'スタートが2件（取り消した1件は数えない）');
+  ok(RT.importer.lapsAt(all, T1) === 1 && RT.importer.lapsAt(all, T2) === 2, '周回数が、送信を通してもスタートごとに残る');
+  ok(RT.importer.lapsAt(racers, T1) === null, '周回数の記録が無ければ null（画面の設定を使う）');
+  const oc1 = RT.importer.opsCourse(all, T1), oc2 = RT.importer.opsCourse(all, T2);
+  ok(oc1.relocate.laps === 1 && oc2.relocate.laps === 2, 'コースの周回数は、選んだレースのもの');
+
+  const w1 = RT.importer.raceWindow(st, T1), w2 = RT.importer.raceWindow(st, T2);
+  ok(w1.fromMs === T1 - 360000 && w1.toMs === T2 - 360000, '第1レースの時間帯は、次のスタートの6分前まで');
+  ok(w2.fromMs === T2 - 360000 && w2.toMs === Infinity, '最後のレースの時間帯は、記録の最後まで');
+  ok(RT.importer.raceWindow(st, T1 + 5000) === null, '手で合わせたスタート時刻のときは、時間帯を区切らない');
+
+  const course1 = RT.course.build(Object.assign({}, RT.course.DEFAULTS, oc1.relocate), oc1.overrides);
+  const course2 = RT.course.build(Object.assign({}, RT.course.DEFAULTS, oc2.relocate), oc2.overrides);
+  const gates1 = RT.race.gates(course1), gates2 = RT.race.gates(course2);
+  ok(gates1.length === gA.length && gates2.length === gB.length, 'ゲートの数が周回数に合う (' + gates1.length + ' / ' + gates2.length + ')');
+
+  // 第1レース
+  const d1 = RT.importer.build(racers, course1, T1, w1);
+  ok(d1.t0 === -360 && d1.tEnd === (T2 - 360000 - T1) / 1000, '第1レースの時間のバーは、そのレースの間だけ');
+  const e1 = RT.race.analyze(gates1, d1.boats);
+  let worst1 = 0;
+  [0, 1, 2].forEach(i => {
+    ok(e1[i].length === gates1.length, '第1レース 艇' + i + ' はフィニッシュ');
+    for (let j = 0; j < Math.min(e1[i].length, evA[i].length); j++) worst1 = Math.max(worst1, Math.abs(e1[i][j] - evA[i][j]));
+  });
+  ok(worst1 < 1, '第1レースの回航時刻が元のレースと一致 (最大のずれ ' + worst1.toFixed(2) + '秒)');
+  ok(e1[3].length === 2, '途中でやめた艇3は、上マークまで（' + e1[3].length + 'ゲート）。次のレースの動きを数えない');
+  ok(d1.boats[4].none === true && e1[4].length === 0, '第2レースから出た艇4は、第1レースには記録なし');
+  const loose = RT.race.analyze(gates1, RT.importer.build(racers, course1, T1).boats);
+  console.log('  区切らない場合、艇3は ' + loose[3].length + ' ゲート通過と数えられ、艇4は ' + loose[4].length + ' ゲート（どちらも第2レースでの動き）');
+
+  // 第2レース
+  const d2 = RT.importer.build(racers, course2, T2, w2);
+  ok(d2.t0 === -360, '第2レースは、そのスタートの6分前から');
+  const e2 = RT.race.analyze(gates2, d2.boats);
+  let worst2 = 0;
+  e2.forEach((e, i) => {
+    ok(e.length === gates2.length, '第2レース 艇' + i + ' は2周してフィニッシュ (' + e.length + '/' + gates2.length + ')');
+    for (let j = 0; j < Math.min(e.length, evB[i].length); j++) worst2 = Math.max(worst2, Math.abs(e[j] - evB[i][j]));
+  });
+  ok(worst2 < 1, '第2レースの回航時刻が元のレースと一致 (最大のずれ ' + worst2.toFixed(2) + '秒)');
+  ok(d2.boats.every(b => !b.none), '第2レースは全艇に記録がある');
+
+  let threw = false;
+  try { RT.importer.build(racers, course1, T1, { fromMs: T1 - 9e7, toMs: T1 - 8e7 }); } catch (e) { threw = true; }
+  ok(threw, '記録のない時間帯を選んだら、理由を付けて断る');
+}
+
 // 模擬の送り先を立てて、登録 → 送信 → 一覧 → 読み込み を通す
 async function cloudRoundTrip() {
   const PORT = 5199, PASS = 'umi-no-aikotoba';
