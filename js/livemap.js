@@ -419,6 +419,8 @@
       },
       /* 全体が見えるように合わせ直す（指で動かしたあとに、自動の合わせ直しを再開する） */
       refit: function () { autoFit = true; map.invalidateSize(); fit(true); },
+      /* 地図を片付ける（別の記録を始めるときに、古い「自分」を残さないため） */
+      destroy: function () { stop(); map.remove(); },
       info: function () {
         var out = { day: day, up: Math.round(up), marks: Object.keys(marks), dists: dists, boats: {},
           targets: targets.map(function (t) { return t.key; }), navTo: navTo && navTo.key,

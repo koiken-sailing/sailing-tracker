@@ -13,6 +13,7 @@
   var MAX_HOURS = 12;
   var MARK_TYPES = { m1: 1, m4: 1, fin: 1, start: 1, 'start-cancel': 1 };
   var PRE_MS = 6 * 60 * 1000;   // レースの表示は、スタートの6分前から（5分前の予告信号が入るように）
+  var NEXT_MS = 5 * 60 * 1000;  // レースの終わりは、次のレースの予告信号（スタート5分前）まで
   // 同じマークをこれ以上あけて打ち直したら「マークの設定を変えた」とみなして、セッションを分ける。
   // これより短い間隔の打ち直しは、押し間違いの訂正として位置を置き換えるだけにする。
   var SESSION_GAP_MS = 3 * 60 * 1000;
@@ -73,6 +74,31 @@
       last: use[use.length - 1].t,
       medAcc: median(use.filter(function (p) { return p.acc !== null && isFinite(p.acc); }).map(function (p) { return p.acc; }))
     };
+  }
+
+  /* 同じ人が1日に記録を分けていたら（昼休みに終了して午後に始め直した、など）、1艇にまとめる。
+   * 同じとみなすのは、セール番号・名前・運営艇かどうかが同じで、記録の時間帯が重ならないもの。
+   * 時間帯が重なっていれば別の艇（同じ番号を名乗った別の人）として、そのまま残す。 */
+  function mergeSame(tracks) {
+    var out = [];
+    tracks.slice().sort(function (a, b) { return a.first - b.first; }).forEach(function (tr) {
+      var host = null;
+      out.forEach(function (o) {
+        if (!host && o.sail !== '' && o.sail === tr.sail && o.name === tr.name && o.ops === tr.ops && o.last < tr.first) host = o;
+      });
+      if (!host) {
+        out.push(Object.assign({}, tr, { fixes: tr.fixes.slice(), marks: tr.marks.slice(), parts: 1 }));
+        return;
+      }
+      host.fixes = host.fixes.concat(tr.fixes);
+      host.marks = host.marks.concat(tr.marks).sort(function (a, b) { return a.t - b.t; });
+      host.total += tr.total;
+      host.dropped += tr.dropped;
+      host.last = tr.last;
+      host.parts++;
+      host.medAcc = median(host.fixes.filter(function (p) { return p.acc !== null && isFinite(p.acc); }).map(function (p) { return p.acc; }));
+    });
+    return out;
   }
 
   /* 1艇分を、1秒ごとの位置・針路・艇速に並べ直す。記録の前後は端の位置で止めておく。 */
@@ -170,15 +196,17 @@
     return out;
   }
 
-  /* あるレースとして見せる時間帯。スタートの6分前から、次のレースのスタートの6分前まで。
+  /* あるレースとして見せる時間帯。スタートの6分前から、次のレースの予告信号（スタート5分前）まで。
    * 次のレースが無ければ、記録の最後まで。運営艇が記録したスタートでなければ null（＝全体を見せる）。
-   * こうしておくと、途中でやめた艇の「次のレースでの動き」が、前のレースの続きとして数えられない。 */
+   * こうしておくと、途中でやめた艇の「次のレースでの動き」が、前のレースの続きとして数えられない。
+   * 終わりを予告信号までにしてあるのは、最後の艇のフィニッシュ直後に次の予告信号を出しても、
+   * そのフィニッシュが切り捨てられないようにするため。 */
   function raceWindow(startList, startMs) {
     var i = startList.indexOf(startMs);
     if (i < 0) return null;
     return {
       fromMs: startMs - PRE_MS,
-      toMs: i + 1 < startList.length ? startList[i + 1] - PRE_MS : Infinity
+      toMs: i + 1 < startList.length ? startList[i + 1] - NEXT_MS : Infinity
     };
   }
 
@@ -291,7 +319,7 @@
   }
 
   RT.importer = {
-    parse: parse, build: build, MAX_ACC: MAX_ACC,
+    parse: parse, build: build, MAX_ACC: MAX_ACC, mergeSame: mergeSame,
     starts: starts, opsCourse: opsCourse, positionAt: positionAt,
     raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS, practiceCourse: practiceCourse,
     sessions: sessions, sessionWindow: sessionWindow, SESSION_GAP_MS: SESSION_GAP_MS

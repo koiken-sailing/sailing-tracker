@@ -1,7 +1,7 @@
 /* 計算部分の自動テスト。実行: node tools/test.js */
 'use strict';
 const path = require('path');
-['geo', 'course', 'sim', 'race', 'analysis', 'importer', 'config', 'cloud'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
+['geo', 'course', 'sim', 'race', 'analysis', 'importer', 'config', 'cloud', 'plan'].forEach(f => require(path.join(__dirname, '..', 'js', f + '.js')));
 const RT = globalThis.RT, G = RT.geo;
 
 let failed = 0, passed = 0;
@@ -453,7 +453,7 @@ console.log('8. 1日に複数レース');
   ok(oc1.relocate.laps === 1 && oc2.relocate.laps === 2, 'コースの周回数は、選んだレースのもの');
 
   const w1 = RT.importer.raceWindow(st, T1), w2 = RT.importer.raceWindow(st, T2);
-  ok(w1.fromMs === T1 - 360000 && w1.toMs === T2 - 360000, '第1レースの時間帯は、次のスタートの6分前まで');
+  ok(w1.fromMs === T1 - 360000 && w1.toMs === T2 - 300000, '第1レースの時間帯は、スタートの6分前から、次のレースの予告信号（5分前）まで');
   ok(w2.fromMs === T2 - 360000 && w2.toMs === Infinity, '最後のレースの時間帯は、記録の最後まで');
   ok(RT.importer.raceWindow(st, T1 + 5000) === null, '手で合わせたスタート時刻のときは、時間帯を区切らない');
 
@@ -464,7 +464,7 @@ console.log('8. 1日に複数レース');
 
   // 第1レース
   const d1 = RT.importer.build(racers, course1, T1, w1);
-  ok(d1.t0 === -360 && d1.tEnd === (T2 - 360000 - T1) / 1000, '第1レースの時間のバーは、そのレースの間だけ');
+  ok(d1.t0 === -360 && d1.tEnd === (T2 - 300000 - T1) / 1000, '第1レースの時間のバーは、そのレースの間だけ');
   const e1 = RT.race.analyze(gates1, d1.boats);
   let worst1 = 0;
   [0, 1, 2].forEach(i => {
@@ -473,7 +473,18 @@ console.log('8. 1日に複数レース');
   });
   ok(worst1 < 1, '第1レースの回航時刻が元のレースと一致 (最大のずれ ' + worst1.toFixed(2) + '秒)');
   ok(e1[3].length === 2, '途中でやめた艇3は、上マークまで（' + e1[3].length + 'ゲート）。次のレースの動きを数えない');
-  ok(d1.boats[4].none === true && e1[4].length === 0, '第2レースから出た艇4は、第1レースには記録なし');
+  ok(e1[4].length < gates1.length, '第2レースから出た艇4は、第1レースをフィニッシュした扱いにならない (' + e1[4].length + 'ゲート)');
+  {
+    // 最後の艇がフィニッシュした30秒後に、次のレースの予告信号を出した場合でも、そのフィニッシュを数える
+    const lastFin = Math.max(...[0, 1, 2].map(i => evA[i][gA.length - 1]));
+    const T2q = T1 + Math.ceil(lastFin + 330) * 1000;                 // 次のスタート = 最後のフィニッシュの5分30秒後
+    const only1 = [0, 1, 2].map(i => viaCloud({ sail: String(210 + i), name: '速' + i, ops: false, marks: [], fixes: fixesOf(cA, simA, simA.boats[i], T1) }));
+    const wq = RT.importer.raceWindow([T1, T2q], T1);
+    const eq = RT.race.analyze(gates1, RT.importer.build(only1, course1, T1, wq).boats);
+    ok(eq.every(e => e.length === gates1.length), '次の予告信号の直前のフィニッシュも数える (' + eq.map(e => e.length).join('/') + ')');
+    const cut = RT.race.analyze(gates1, RT.importer.build(only1, course1, T1, { fromMs: wq.fromMs, toMs: T2q - 360000 }).boats);
+    console.log('  区切りが6分前のままだと、フィニッシュできた艇は ' + cut.filter(e => e.length === gates1.length).length + '/3（直す前の不具合）');
+  }
   const loose = RT.race.analyze(gates1, RT.importer.build(racers, course1, T1).boats);
   console.log('  区切らない場合、艇3は ' + loose[3].length + ' ゲート通過と数えられ、艇4は ' + loose[4].length + ' ゲート（どちらも第2レースでの動き）');
 
@@ -564,6 +575,84 @@ console.log('9. マーク練習と陸上テスト');
   const lp = C.pack(landFile, { anywhere: true });
   ok(lp && lp.rec.n === 100 && lp.outside === 0, '陸上テスト用の入口では、範囲の外でも送る');
   ok(C.unpack(lp.rec).marks[0][2] === 35.0, '陸上テストでは、マークの位置も送る');
+}
+
+// ---- 10. 同じ人の記録をまとめる ----
+console.log('10. 同じ人の記録をまとめる');
+{
+  const T = new Date(2026, 10, 22, 10, 0, 0).getTime();
+  const mk = (sail, name, t0, n, ops) => RT.importer.parse(JSON.stringify({
+    format: 'yacht-track', version: 1, sail, name, ops: !!ops, marks: [],
+    fixes: Array.from({ length: n }, (_, i) => [t0 + i * 1000, 34.68 + i * 1e-5, 135.32, 5 + (i % 3), null, null])
+  }), sail);
+  const am = mk('1001', 'あお', T, 100), pm = mk('1001', 'あお', T + 3600000, 200);
+  const merged = RT.importer.mergeSame([pm, am, mk('1002', 'あか', T, 50)]);
+  ok(merged.length === 2, '午前と午後に分かれた同じ人の記録は、1艇にまとまる (' + merged.length + '艇)');
+  const m = merged.find(t => t.sail === '1001');
+  ok(m.parts === 2 && m.fixes.length === 300 && m.first === T && m.last === T + 3600000 + 199000, 'つないだ記録は、最初から最後までを持つ');
+  ok(m.fixes.every((f, i) => i === 0 || f.t > m.fixes[i - 1].t), 'つないだ記録は時刻順');
+  ok(am.fixes.length === 100 && pm.fixes.length === 200, '元の記録は書き換えない');
+  ok(RT.importer.mergeSame([am, mk('1001', 'あお', T + 50000, 100)]).length === 2, '時間帯が重なっていれば、別の艇として残す');
+  ok(RT.importer.mergeSame([am, mk('1001', 'べつ', T + 3600000, 10)]).length === 2, '名前が違えば、まとめない');
+  ok(RT.importer.mergeSame([am, mk('1001', 'あお', T + 3600000, 10, true)]).length === 2, '運営艇と選手は、まとめない');
+  ok(RT.importer.mergeSame([mk('', 'なし', T, 10), mk('', 'なし', T + 3600000, 10)]).length === 2, 'セール番号が空の記録は、まとめない');
+  const built = RT.importer.build([m], RT.course.build(RT.course.DEFAULTS, {}), T);
+  ok(built.boats.length === 1 && built.tEnd === 3600 + 199, 'まとめた記録を、そのまま表示用に並べ直せる');
+}
+
+// ---- 11. コース設定ナビの計算 ----
+console.log('11. コース設定ナビの計算');
+{
+  const P = RT.plan;
+  ok(P.clamp('wind', 'abc') === null && P.clamp('dist', '') === null && P.clamp('dist', null) === null, '数字でない入力は受け付けない');
+  ok(P.clamp('wind', 365) === 5 && P.clamp('wind', -10) === 350 && P.clamp('wind', '200') === 200, '風軸は 0〜359 に直す');
+  ok(P.clamp('dist', 10) === 50 && P.clamp('dist', 99999) === 3000 && P.clamp('line', 3) === 10 && P.clamp('dist', 612.4) === 612, '距離は使える範囲の整数に直す');
+  ok(P.calc({ wind: 200, dist: 600, line: 100, ops: true, m1: null, m4: null }) === null, 'マークを1つも打っていなければ、目標は出ない');
+
+  // 下マークを先に打った運営艇: 上マーク・本部船・フィニッシュマークの目標が出る
+  const m4 = { lat: 34.695, lon: 135.325 };
+  const inp = { wind: 200, dist: 600, line: 100, ops: true, m1: null, m4, fin: null, started: null };
+  const c = P.calc(inp);
+  const T = k => c.targets.find(t => t.key === k);
+  ok(c.targets.map(t => t.key).join() === 'm1,cb,fin', '下マークのあとは、上マーク・本部船・フィニッシュマークが目標');
+  near(G.dist({ x: 0, y: 0 }, T('m1')), 600, 0.01, '上マークの目標は、下マークから指定した距離');
+  ok(P.axisAngle(m4, T('m1')) === 200, '上マークの目標は、下マークから見て風軸の方位');
+  near(G.dist({ x: 0, y: 0 }, T('cb')), 100, 0.01, '本部船の目標は、下マークからスタートラインの長さ');
+  ok(P.axisAngle(m4, T('cb')) === 290, '本部船の目標は、風上に向かって右（風軸+90°）');
+  near(G.dist(T('cb'), T('fin')), P.FIN_LEN, 0.01, 'フィニッシュマークの目標は、本部船からフィニッシュラインの長さ');
+  // 観戦ページのコースの作り方（js/course.js）と同じ位置になること
+  const course = RT.course.build({ lat: T('cb').lat, lon: T('cb').lon, windMag: 200, d14: 600, startLen: 100, finLen: P.FIN_LEN, laps: 2, windKn: 10 }, {});
+  const toPlan = pt => { const q = course.latLon(pt); return c.proj.toXY(q.lat, q.lon); };
+  near(G.dist(toPlan(course.marks.m4), { x: 0, y: 0 }), 0, 1, '観戦ページのコースと下マークの位置が一致');
+  near(G.dist(toPlan(course.marks.m1), T('m1')), 0, 1, '観戦ページのコースと上マークの位置が一致');
+  near(G.dist(toPlan(course.marks.fin), T('fin')), 0, 1, '観戦ページのコースとフィニッシュマークの位置が一致');
+
+  // 案内: 下マークから風上へ300m、右へ40mの位置にいるとき
+  const hereXY = G.offset(G.offset({ x: 0, y: 0 }, c.windTrue, 300), c.windTrue + 90, 40);
+  const g = P.guide(c, T('m1'), c.proj.toLatLon(hereXY));
+  near(g.along, 300, 0.01, '風上へあと何m');
+  near(g.cross, -40, 0.01, '左右のずれ（右にいるので、目標は左へ40m）');
+  near(g.dist, Math.hypot(300, 40), 0.01, '目標までの距離');
+  ok(Math.abs(G.norm180(g.brg - (200 - Math.atan2(40, 300) * 180 / Math.PI))) <= 1, '目標の方位（コンパスの読み）は、風軸より少し左 (' + g.brg + '°)');
+  near(P.guide(c, T('m1'), { lat: T('m1').lat, lon: T('m1').lon }).dist, 0, 0.01, '目標の上にいれば距離は0');
+
+  // 上マークを目標から少しずれた位置に打ったとき
+  const off = c.proj.toLatLon(G.offset(T('m1'), 90, 12));
+  const c2 = P.calc(Object.assign({}, inp, { m1: off }));
+  const t1 = c2.targets.find(t => t.key === 'm1');
+  near(t1.dev, 12, 0.01, '打ったあとは、目標とのずれが出る');
+  ok(t1.placed === off && c2.targets.length === 3, '打ったマークも一覧に残る');
+  near(P.calc(Object.assign({}, inp, { m1: off, wind: 210 })).targets[0].dev, 2 * 600 * Math.sin(5 * Math.PI / 180), 14, '風軸を10°変えると、目標とのずれが大きくなる');
+
+  // 上マークを先に打ったマーク練習: 下マークの目標だけが出る
+  const m1 = { lat: 34.69, lon: 135.32 };
+  const c3 = P.calc({ wind: 200, dist: 400, line: 100, ops: false, m1, m4: null });
+  ok(c3.targets.length === 1 && c3.targets[0].key === 'm4', '上マークを先に打つと、下マークが目標（マーク練習は本部船なし）');
+  near(G.dist({ x: 0, y: 0 }, c3.targets[0]), 400, 0.01, '下マークの目標は、上マークから指定した距離');
+  ok(P.axisAngle(m1, c3.targets[0]) === 20, '下マークの目標は、上マークから見て風下（風軸の反対）');
+  // 上マークを先に打った運営艇: 本部船の目標は、下マークの目標を基準に出す
+  const c4 = P.calc({ wind: 200, dist: 400, line: 80, ops: true, m1, m4: null });
+  near(G.dist(c4.targets.find(t => t.key === 'm4'), c4.targets.find(t => t.key === 'cb')), 80, 0.01, '下マークがまだでも、本部船の目標は下マークの目標から測る');
 }
 
 // 模擬の送り先を立てて、登録 → 送信 → 一覧 → 読み込み を通す

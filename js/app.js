@@ -913,6 +913,7 @@
       catch (e) { errors.push((it.name || 'ファイル') + ': ' + e.message); }
     });
     if (!tracks.length) { toast(errors[0] || '読み込めるファイルがありませんでした。'); return false; }
+    tracks = RT.importer.mergeSame(tracks);   // 同じ人が記録を分けていたら、1艇にまとめる
     tracks.sort(function (a, b) { return a.sail < b.sail ? -1 : a.sail > b.sail ? 1 : 0; });
     var first = Infinity;
     tracks.forEach(function (tr) { first = Math.min(first, tr.first); });
@@ -1180,6 +1181,7 @@
       var c1 = el('td', 'pos');
       c1.appendChild(el('div', null, clockOfDay(tr.first) + ' 〜 ' + clockOfDay(tr.last)));
       c1.appendChild(el('div', null, tr.fixes.length + '点' + (tr.dropped ? '（精度の悪い' + tr.dropped + '点を除外）' : '')));
+      if (tr.parts > 1) c1.appendChild(el('div', null, tr.parts + '回に分かれた記録を、1艇にまとめています'));
       if (tr.ops) {
         var nMark = tr.marks.filter(function (m) { return m.type === 'm1' || m.type === 'm4' || m.type === 'fin'; }).length;
         c1.appendChild(el('div', null, 'マークの記録 ' + nMark + '件・スタート ' + RT.importer.starts([tr]).length + '件'));

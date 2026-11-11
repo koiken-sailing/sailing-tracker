@@ -250,21 +250,18 @@
 
   // ---------- コース設定ナビ（最初に打ったマークと、風軸・距離から、残りのマークの目標位置を出す） ----------
   var GEO = window.RT && window.RT.geo;
-  var PLAN_DEFAULT = { wind: 200, dist: 600, line: 100 };
-  var PLAN_LIMIT = { wind: [0, 359], dist: [50, 3000], line: [10, 500] };
-  var FIN_LEN = 50;        // フィニッシュラインの長さの目安 m
-  var ARRIVE_M = 10;       // 目標のこの距離以内に入ったら「到着」とする（GPS の誤差が5mほどあるため）
-  var TARGET_NAMES = { m1: '上マーク', m4: '下マーク', cb: '本部船の位置', fin: 'フィニッシュマーク' };
+  var PLAN = window.RT && window.RT.plan;      // 目標位置の計算（js/plan.js）
+  var TARGET_NAMES = PLAN ? PLAN.NAMES : {};
+  var ARRIVE_M = PLAN ? PLAN.ARRIVE_M : 10;
 
+  function pos(m) { return m ? { lat: m[2], lon: m[3] } : null; }
   function plan() {
-    if (!st.meta.plan) st.meta.plan = Object.assign({}, PLAN_DEFAULT, (store.get(PROFILE) || {}).plan);
+    if (!st.meta.plan) st.meta.plan = Object.assign({}, PLAN ? PLAN.DEFAULT : {}, (store.get(PROFILE) || {}).plan);
     return st.meta.plan;
   }
   function setPlan(key, value) {
-    var lim = PLAN_LIMIT[key], v = Math.round(Number(value));
-    if (!isFinite(v)) return;
-    if (key === 'wind') v = ((v % 360) + 360) % 360;
-    v = Math.max(lim[0], Math.min(lim[1], v));
+    var v = PLAN ? PLAN.clamp(key, value) : null;
+    if (v === null) { renderPlan(); return; }   // 数字でなければ、欄を元の値に戻す
     plan()[key] = v;
     store.set(META, st.meta);
     var prof = store.get(PROFILE) || {};
@@ -273,57 +270,28 @@
     renderPlan();
     renderDist();
   }
-  /* 下マークから上マークを見た角度（コンパスの読み、度）。計算の部品が無ければ null。 */
+  /* from から to を見た角度（コンパスの読み、度）。from, to はマークの記録。計算の部品が無ければ null。 */
   function axisAngle(from, to) {
-    if (!GEO) return null;
-    var proj = GEO.projection(from[2], from[3]);
-    var brg = GEO.bearing({ x: 0, y: 0 }, proj.toXY(to[2], to[3]));
-    return Math.round(GEO.norm360(brg + GEO.declinationWest(from[2], from[3]))) % 360;
+    return PLAN ? PLAN.axisAngle(pos(from), pos(to)) : null;
   }
-  /* 目標位置の計算。基準は下マーク（打ってあれば実際の位置、まだなら上マークから風下へ取った目標）。
-   *   上マークの目標 = 下マークから風上へ「上下の距離」
-   *   本部船の目標   = 下マークから、風上に向かって右へ「スタートラインの長さ」（運営艇のみ）
-   *   フィニッシュマークの目標 = 本部船の風下側（運営艇のみ）
-   * 戻り値の targets は [{ key, name, lat, lon, x, y, placed: 打った位置 | null, dev: 目標とのずれ m | null }]。 */
+  /* いまの記録から、目標位置を計算する。上マークも下マークも打っていなければ null。 */
   function planCalc() {
-    if (!GEO || !st.meta) return null;
-    var m1 = markAt('m1'), m4 = markAt('m4'), fin = st.meta.ops ? markAt('fin') : null;
-    var anchor = m4 || m1;
-    if (!anchor) return null;
-    var pl = plan(), proj = GEO.projection(anchor[2], anchor[3]);
-    var decl = GEO.declinationWest(anchor[2], anchor[3]), wt = GEO.norm360(pl.wind - decl);
-    function xy(m) { return m ? proj.toXY(m[2], m[3]) : null; }
-    var p1 = xy(m1), p4 = xy(m4), targets = [];
-    var low = p4 || GEO.offset(p1, wt + 180, pl.dist);          // 下マークの位置（実際、または目標）
-    function add(key, p, placed) {
-      var q = proj.toLatLon(p), pp = xy(placed);
-      targets.push({ key: key, name: TARGET_NAMES[key], lat: q.lat, lon: q.lon, x: p.x, y: p.y,
-        placed: placed || null, dev: pp ? GEO.dist(pp, p) : null });
-    }
-    if (!m4) add('m4', low, null);
-    if (m4) add('m1', GEO.offset(low, wt, pl.dist), m1);
-    if (st.meta.ops) {
-      var cb = GEO.offset(low, wt + 90, pl.line);
-      var started = null;
-      validStarts().forEach(function (s) { if (s[2] !== null) started = s; });
-      add('cb', cb, started);
-      var ang = Math.asin(Math.min(1, FIN_LEN / (2 * pl.line))) * 180 / Math.PI;
-      add('fin', GEO.offset(cb, wt + 180 + ang, FIN_LEN), fin);
-    }
-    return { proj: proj, decl: decl, windTrue: wt, targets: targets, m1: m1, m4: m4, fin: fin };
+    if (!PLAN || !st.meta) return null;
+    var m1 = markAt('m1'), m4 = markAt('m4'), fin = st.meta.ops ? markAt('fin') : null, started = null;
+    if (st.meta.ops) validStarts().forEach(function (s) { if (s[2] !== null) started = s; });
+    var pl = plan();
+    var c = PLAN.calc({
+      wind: pl.wind, dist: pl.dist, line: pl.line, ops: !!st.meta.ops,
+      m1: pos(m1), m4: pos(m4), fin: pos(fin), started: pos(started)
+    });
+    if (!c) return null;
+    c.m1 = m1; c.m4 = m4; c.fin = fin;
+    return c;
   }
   /* いまの位置から目標までの、距離・方位と、風軸に沿った成分（風上へ何m・右へ何m） */
   function guideTo(calc, t) {
     var f = st.fixes[st.fixes.length - 1];
-    if (!f) return null;
-    var here = calc.proj.toXY(f[1], f[2]), v = { x: t.x - here.x, y: t.y - here.y };
-    var up = GEO.vec(calc.windTrue), right = GEO.vec(calc.windTrue + 90);
-    return {
-      dist: Math.hypot(v.x, v.y),
-      brg: Math.round(GEO.norm360(GEO.bearing(here, t) + calc.decl)) % 360,
-      along: v.x * up.x + v.y * up.y,
-      cross: v.x * right.x + v.y * right.y
-    };
+    return f ? PLAN.guide(calc, t, { lat: f[1], lon: f[2] }) : null;
   }
   /* ナビで案内する目標。まだ打っていないもののうち、最初のもの（「次の目標へ」で切り替えられる）。 */
   function navTarget(calc) {
@@ -736,9 +704,13 @@
     $('lCount').textContent = '地図を読み込んでいます…';
     RT.livemap.loadLeaflet().then(function () {
       if ($('liveView').hidden) return;   // 読み込んでいる間に解除された
+      // 地図は記録ごとに作る。前の記録のときの地図が残っていると、古い「自分」が別の艇として残ってしまう
+      var selfId = (st.meta && st.meta.cid) || 'me';
+      if (st.map && st.mapSelf !== selfId) { st.map.destroy(); st.map = null; }
       if (!st.map) {
+        st.mapSelf = selfId;
         st.map = RT.livemap.create($('liveMap'), {
-          selfId: (st.meta && st.meta.cid) || 'me',
+          selfId: selfId,
           interactive: false,
           onStatus: function (s) {
             $('lCount').textContent = s.error ? s.error : 'ほか ' + Math.max(0, s.moving - (st.meta && st.meta.pub ? 1 : 0)) + '艇';
