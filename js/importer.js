@@ -61,7 +61,7 @@
       file: fileName || '',
       sail: String(d.sail === undefined ? '' : d.sail).slice(0, 12),
       name: String(d.name === undefined ? '' : d.name).slice(0, 20),
-      ops: !!d.ops || marks.length > 0,   // 運営艇の記録かどうか
+      ops: !!d.ops,                       // 運営艇の記録かどうか（マーク練習の選手は、マークを打っていても選手）
       marks: marks,
       fixes: use,
       total: uniq.length,
@@ -186,6 +186,33 @@
     return laps;
   }
 
+  /* マーク練習の日（スタートの記録が無く、マークを打った位置だけがある日）のコース。
+   * 上マーク・下マークは、それぞれ最後に打った位置を使う。どちらも無ければ null。
+   * 本部船やスタートラインは使わないが、コースの計算に置き場所が要るので、下マークの横に仮置きする。
+   * windMagFallback は、マークが1個しか無くて風軸を決められないときに使う値。 */
+  function practiceCourse(tracks, windMagFallback) {
+    var last = {};
+    allMarks(tracks).forEach(function (m) {
+      if ((m.type === 'm1' || m.type === 'm4' || m.type === 'fin') && m.lat !== null) last[m.type] = m;
+    });
+    if (!last.m1 && !last.m4) return null;
+    var overrides = {}, found = {};
+    ['m1', 'm4', 'fin'].forEach(function (key) {
+      found[key] = !!last[key];
+      if (last[key]) overrides[key] = { lat: last[key].lat, lon: last[key].lon };
+    });
+    var ref = last.m4 || last.m1;
+    var proj = G.projection(ref.lat, ref.lon);
+    var decl = G.declinationWest(ref.lat, ref.lon);
+    var windMag = windMagFallback;
+    if (found.m1 && found.m4) {
+      var brg = G.bearing({ x: 0, y: 0 }, proj.toXY(overrides.m1.lat, overrides.m1.lon));
+      windMag = Math.round(G.norm360(brg + decl)) % 360;
+    }
+    var side = proj.toLatLon(G.offset({ x: 0, y: 0 }, G.norm360(windMag - decl + 90), 100));
+    return { relocate: { lat: side.lat, lon: side.lon, windMag: windMag }, overrides: overrides, found: found };
+  }
+
   /* 運営艇の記録から、あるスタート時刻のレースのコースを組み立てる。運営艇の記録が無ければ null。
    *   各マーク: そのスタート以前で最後に打った位置（無ければ、その後で最初に打った位置）
    *   本部船:   スタート信号を押した位置（無ければ、その時刻の運営艇の位置）
@@ -229,6 +256,6 @@
   RT.importer = {
     parse: parse, build: build, MAX_ACC: MAX_ACC,
     starts: starts, opsCourse: opsCourse, positionAt: positionAt,
-    raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS
+    raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS, practiceCourse: practiceCourse
   };
 })(typeof window !== 'undefined' ? window : globalThis);

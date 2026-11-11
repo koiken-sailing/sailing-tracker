@@ -494,6 +494,45 @@ console.log('8. 1日に複数レース');
   ok(threw, '記録のない時間帯を選んだら、理由を付けて断る');
 }
 
+// ---- 9. マーク練習（選手が自分でマークを打つ）と、陸上テスト用の送信 ----
+console.log('9. マーク練習と陸上テスト');
+{
+  const p = Object.assign({}, RT.course.DEFAULTS, { lat: 34.685, lon: 135.32, windMag: 200, d14: 400 });
+  const c = RT.course.build(p, {});
+  const m1 = c.latLon(c.marks.m1), m4 = c.latLon(c.marks.m4), old = c.latLon(G.offset(c.marks.m1, 90, 150));
+  const T = new Date(2026, 10, 20, 13, 0, 0).getTime();
+  const fixes = [];
+  for (let i = 0; i < 900; i++) { const q = c.latLon(G.offset(c.marks.m4, 200 + i * 0.4, 30 + (i % 300))); fixes.push([T + i * 1000, q.lat, q.lon, 5, 2, 0]); }
+  const file = { format: 'yacht-track', version: 1, sail: '300', name: 'れんしゅう', ops: false, practice: true, fixes,
+    marks: [[T + 60000, 'm1', old.lat, old.lon, 5, 100], [T + 120000, 'm4', m4.lat, m4.lon, 5, 100], [T + 300000, 'm1', m1.lat, m1.lon, 5, 100]] };
+  const tr = RT.importer.parse(JSON.stringify(C.unpack(C.pack(file).rec)), 'p');
+  const other = RT.importer.parse(JSON.stringify({ format: 'yacht-track', version: 1, sail: '301', name: 'ほか', ops: false, marks: [], fixes }), 'o');
+  ok(tr.ops === false && tr.marks.length === 3, 'マークを打った選手は、運営艇ではなく選手として扱う');
+  ok(RT.importer.starts([tr, other]).length === 0, 'マーク練習にはスタートの記録が無い');
+  const pc = RT.importer.practiceCourse([other, tr], 10);
+  ok(pc && pc.found.m1 && pc.found.m4 && !pc.found.fin, '上マークと下マークを取り出す（フィニッシュマークは無い）');
+  const c2 = RT.course.build(Object.assign({}, RT.course.DEFAULTS, pc.relocate), pc.overrides);
+  const back = pt => { const q = c2.latLon(pt); return c.proj.toXY(q.lat, q.lon); };
+  near(G.dist(back(c2.marks.m1), c.marks.m1), 0, 0.5, '上マークは、最後に打った位置');
+  near(G.dist(back(c2.marks.m4), c.marks.m4), 0, 0.5, '下マークの位置');
+  near(G.norm180(pc.relocate.windMag - p.windMag), 0, 1, '風軸は、下マークから上マークを見た向き');
+  near(G.dist(back(c2.cb), c.marks.m4), 100, 1, '本部船は下マークの横に仮置き（表示はしない）');
+  ok(isFinite(c2.marks.fin.x) && RT.race.gates(c2).length > 0, '仮置きでもコースの計算が壊れない');
+  const one = RT.importer.parse(JSON.stringify(Object.assign({}, file, { marks: [[T + 60000, 'm1', m1.lat, m1.lon, 5, 100]] })), 'one');
+  const pc1 = RT.importer.practiceCourse([one], 135);
+  ok(pc1 && pc1.found.m1 && !pc1.found.m4 && pc1.relocate.windMag === 135, 'マークが1個だけなら、風軸は画面の設定を使う');
+  ok(RT.importer.practiceCourse([other], 10) === null, 'マークの記録が無ければ、マーク練習として扱わない');
+
+  // 陸上テスト用の入口から始めた記録だけ、範囲の外でも送る
+  const land = [];
+  for (let i = 0; i < 100; i++) land.push([T + i * 1000, 35.0 + i * 1e-5, 135.9, 8, null, null]);
+  const landFile = { sail: '1', name: 'りく', fixes: land, marks: [[T + 5000, 'm1', 35.0, 135.9, 5, 100]] };
+  ok(C.pack(landFile) === null, 'ふつうの入口では、陸の上の記録は送らない');
+  const lp = C.pack(landFile, { anywhere: true });
+  ok(lp && lp.rec.n === 100 && lp.outside === 0, '陸上テスト用の入口では、範囲の外でも送る');
+  ok(C.unpack(lp.rec).marks[0][2] === 35.0, '陸上テストでは、マークの位置も送る');
+}
+
 // 模擬の送り先を立てて、登録 → 送信 → 一覧 → 読み込み を通す
 async function cloudRoundTrip() {
   const PORT = 5199, PASS = 'umi-no-aikotoba';

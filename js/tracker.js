@@ -21,6 +21,9 @@
   var KN = 0.514444;
   var JOIN_WAIT_MS = 8000; // 開始時に合言葉を確かめる通信を待つ長さ（これを過ぎたら記録を先に始める）
 
+  // 陸上テスト用の入口（アドレスの末尾に ?test=1）。この入口から始めた記録だけ、海の上でなくても送る。
+  var LAND_TEST = /[?&]test=1(&|$)/.test(location.search);
+
   var cloud = window.RT && window.RT.cloud;
   var cloudOn = !!(cloud && cloud.enabled());   // 送り先が設定されているときだけ、公開の機能を出す
 
@@ -154,8 +157,12 @@
     logEvent(resume ? 'resume' : 'start');
     clearInterval(st.timer);
     st.timer = setInterval(render, 1000);
-    $('who').textContent = st.meta.sail + '　' + st.meta.name + (st.meta.ops ? '（運営艇）' : '');
-    $('opsPanel').hidden = !st.meta.ops;
+    $('who').textContent = st.meta.sail + '　' + st.meta.name +
+      (st.meta.ops ? '（運営艇）' : st.meta.practice ? '（マーク練習）' : '');
+    // マーク練習は、上マークと下マークのボタンだけを出す（スタートとフィニッシュは使わない）
+    $('opsPanel').hidden = !(st.meta.ops || st.meta.practice);
+    $('opsStartBox').hidden = !st.meta.ops;
+    $('btnFin').hidden = !st.meta.ops;
     renderOps();
     showScreen('live');
     render();
@@ -198,13 +205,64 @@
     st.meta.seq = Date.now() + SEQ_MS;
     store.set(META, st.meta);
     logEvent('seq-start');
+    armSound(true);
     renderOps();
   }
   function cancelSequence() {
     st.meta.seq = null;
     store.set(META, st.meta);
     logEvent('seq-cancel');
+    clearSound();
     renderOps();
+  }
+
+  // ---------- スタート手順の音（4分前・1分前・スタート） ----------
+  // 音は、鳴らす時刻をあらかじめ予約しておく。こうすると、画面の表示が一瞬止まっても時刻どおりに鳴る。
+  // スマホのブラウザは、画面に触れた操作の中でしか音を出し始められないので、ボタンを押したときに予約する。
+  var CUES = [[240, 0.7], [60, 1.2], [0, 1.8]];   // [スタートの何秒前か, 鳴らす長さ（秒）]
+  var snd = { ctx: null, nodes: [], armedFor: null };
+
+  function soundContext() {
+    try {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      if (!snd.ctx) snd.ctx = new AC();
+      // iPhone は、消音スイッチが入っていると鳴らない。対応している機種では「再生」の扱いにして鳴るようにする
+      if (navigator.audioSession) { try { navigator.audioSession.type = 'playback'; } catch (e) { /* 対応していなければそのまま */ } }
+      if (snd.ctx.state === 'suspended') snd.ctx.resume();
+      return snd.ctx;
+    } catch (e) { return null; }
+  }
+  function beepAt(ctx, when, dur) {
+    var osc = ctx.createOscillator(), gain = ctx.createGain();
+    osc.type = 'square';            // 屋外でも聞き取りやすい、硬めの音
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.0001, when);
+    gain.gain.linearRampToValueAtTime(0.6, when + 0.01);
+    gain.gain.setValueAtTime(0.6, when + dur - 0.05);
+    gain.gain.linearRampToValueAtTime(0.0001, when + dur);
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.start(when); osc.stop(when + dur + 0.02);
+    snd.nodes.push(osc);
+  }
+  function clearSound() {
+    snd.nodes.forEach(function (o) { try { o.stop(); } catch (e) { /* 鳴り終わっていれば何もしない */ } });
+    snd.nodes = [];
+    snd.armedFor = null;
+  }
+  /* 進行中のスタート手順の音を予約する。confirm が真なら、音が出ることの確認に短い音を1回鳴らす。 */
+  function armSound(confirm) {
+    clearSound();
+    if (!st.meta || !st.meta.seq) return;
+    var ctx = soundContext();
+    if (!ctx) { logEvent('sound-fail'); return; }
+    var left = (st.meta.seq - Date.now()) / 1000;
+    if (confirm) beepAt(ctx, ctx.currentTime + 0.02, 0.12);
+    CUES.forEach(function (c) {
+      var wait = left - c[0];
+      if (wait > -0.3) beepAt(ctx, ctx.currentTime + Math.max(0.02, wait), c[1]);
+    });
+    snd.armedFor = st.meta.seq;
   }
   /* カウントダウンが0になったら、スタートを自動で記録する。画面が止まっていて遅れても、予定の時刻で記録する。 */
   function tickOps() {
@@ -219,10 +277,11 @@
     return '1分前（P旗 降下）';
   }
   function renderOps() {
-    if (!st.meta || !st.meta.ops) return;
+    if (!st.meta || !(st.meta.ops || st.meta.practice)) return;
     var marks = $('opsMarks');
     marks.textContent = '';
     Object.keys(MARK_NAMES).forEach(function (type) {
+      if (type === 'fin' && !st.meta.ops) return;
       var last = null;
       st.meta.marks.forEach(function (m) { if (m[1] === type) last = m; });
       var li = document.createElement('li');
@@ -256,23 +315,31 @@
     }
   }
 
+  function currentMode() {
+    var r = document.querySelector('input[name="mode"]:checked');
+    return r ? r.value : 'racer';
+  }
+
   function start() {
     var sail = $('sail').value.trim(), name = $('name').value.trim();
     var err = $('setupErr');
     function fail(msg) { err.textContent = msg; err.hidden = false; }
     if (!sail || !name) { fail('セール番号とニックネームを入力してください。'); return; }
-    var ops = $('opsMode').checked;
+    var mode = currentMode();
+    var ops = mode === 'ops', practice = mode === 'practice';
     var pub = cloudOn && $('pubMode').checked;
     var pass = $('pass').value.trim();
     var needJoin = pub && !cloud.joined();
     if (needJoin && !pass) { fail('合言葉を入力してください。公開しないときは、チェックを外してください。'); return; }
     err.hidden = true;
-    store.set(PROFILE, { sail: sail, name: name, ops: ops, pub: pub, laps: (store.get(PROFILE) || {}).laps || 2 });
+    store.set(PROFILE, { sail: sail, name: name, mode: mode, pub: pub, laps: (store.get(PROFILE) || {}).laps || 2 });
 
     function go() {
       st.meta = {
         sail: sail, name: name, started: Date.now(), chunks: 0, stopped: false, log: [],
         ops: ops,      // 運営艇として記録しているか
+        practice: practice,   // マーク練習（選手が自分でマークを打つ）として記録しているか
+        land: LAND_TEST,      // 陸上テスト用の入口から始めた記録か（海の上でなくても送る）
         marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
         seq: null,     // スタート手順の進行中なら、予定しているスタート時刻
         laps: (store.get(PROFILE) || {}).laps || 2,   // 次のスタートの周回数（前回の値を引き継ぐ）
@@ -316,6 +383,7 @@
     flush(true);
     st.meta.stopped = true;
     st.meta.seq = null;   // 進行中のスタート手順は、記録を終えたら無効にする
+    clearSound();
     logEvent('stop');
     store.set(META, st.meta);
     leaveDark();
@@ -326,7 +394,7 @@
   // ---------- 観戦ページへの送信 ----------
   function sendNow() {
     if (!cloudOn || !st.meta || !st.meta.pub || st.send === 'sending') return;
-    var packed = cloud.pack(buildFile());
+    var packed = cloud.pack(buildFile(), { anywhere: !!st.meta.land });
     if (!packed) { st.send = 'none'; renderSend(); return; }
     if (!st.meta.cid) { st.meta.cid = cloud.newId(); store.set(META, st.meta); }
     st.send = 'sending';
@@ -388,6 +456,7 @@
     if (!cloudOn) return;
     var pub = $('pubMode').checked;
     $('passField').hidden = !pub || cloud.joined();
+    $('landNote').hidden = !(LAND_TEST && pub);
     $('setupNote').textContent = pub ?
       '記録はまずこのスマホの中に保存され、記録を終了したときに観戦ページへ送られます。' :
       '記録はこのスマホの中にだけ保存されます。どこにも送信されません。';
@@ -484,6 +553,7 @@
       fixes: st.fixes,
       // 運営艇の記録。種類は m1=上マーク, m4=下マーク, fin=フィニッシュマーク, start=スタート信号, start-cancel=直前のスタートの取り消し
       ops: !!st.meta.ops,
+      practice: !!st.meta.practice,
       // laps はスタートの記録にだけ入る（そのレースの周回数）
       mark_columns: ['time_ms', 'type', 'lat', 'lon', 'accuracy_m', 'fix_age_ms', 'laps'],
       marks: st.meta.marks || [],
@@ -563,7 +633,7 @@
     });
     var pendingStart = null;
     twoStep($('btnStartNow'), 'もう一度押すと、スタートを記録します', function () {
-      if (pendingStart) { st.meta.seq = null; addMark(pendingStart); }
+      if (pendingStart) { st.meta.seq = null; clearSound(); addMark(pendingStart); }
       pendingStart = null;
     }, function () {
       pendingStart = startMark(Date.now());
@@ -608,7 +678,9 @@
   function init() {
     var prof = store.get(PROFILE);
     if (prof) {
-      $('sail').value = prof.sail || ''; $('name').value = prof.name || ''; $('opsMode').checked = !!prof.ops;
+      $('sail').value = prof.sail || ''; $('name').value = prof.name || '';
+      var radio = document.querySelector('input[name="mode"][value="' + (prof.mode || (prof.ops ? 'ops' : 'racer')) + '"]');
+      if (radio) radio.checked = true;
       if (prof.pub === false) $('pubMode').checked = false;
     }
     $('pubMode').addEventListener('change', renderSetup);
@@ -640,7 +712,11 @@
       if (st.meta && st.meta.stopped && !st.meta.sent && st.send === 'net') sendNow();
     });
     // 画面を点けたままにする機能が働いていなければ、次に画面に触れたときにもう一度頼む
-    document.addEventListener('pointerdown', function () { if (st.recording && !st.wake) acquireWake(); });
+    document.addEventListener('pointerdown', function () {
+      if (st.recording && !st.wake) acquireWake();
+      // スタート手順の途中でページを開き直したときは、次に画面に触れたときに音を予約し直す
+      if (st.recording && st.meta && st.meta.seq && snd.armedFor !== st.meta.seq) armSound(false);
+    });
     $('btnDark').addEventListener('click', enterDark);
     $('btnShare').addEventListener('click', share);
     $('btnSave').addEventListener('click', download);
@@ -652,7 +728,13 @@
     document.addEventListener('visibilitychange', function () {
       if (!st.recording) return;
       logEvent(document.visibilityState);
-      if (document.visibilityState === 'visible') acquireWake(); else flush(true);
+      if (document.visibilityState === 'visible') {
+        acquireWake();
+        // 画面が隠れている間は音の時計が止まるので、戻ってきたら残り時間で予約し直す
+        if (st.meta && st.meta.seq && snd.ctx) armSound(false);
+      } else {
+        flush(true);
+      }
     });
     window.addEventListener('pagehide', function () { if (st.recording) flush(true); });
 
@@ -673,5 +755,5 @@
   init();
 
   // 動作確認用
-  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase, sendNow: sendNow };
+  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase, sendNow: sendNow, snd: snd };
 })();

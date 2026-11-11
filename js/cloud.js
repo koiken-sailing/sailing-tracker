@@ -110,18 +110,20 @@
   }
 
   /* 記録ファイル（記録ページの buildFile の形）から、送る中身を作る。
-   * 範囲の中に位置が2点以上なければ null（＝送るものがない）。 */
-  function pack(file) {
+   * 範囲の中に位置が2点以上なければ null（＝送るものがない）。
+   * opts.anywhere が真なら、範囲の制限をかけない（陸上テスト用の入口から始めた記録だけ）。 */
+  function pack(file, opts) {
+    var anywhere = !!(opts && opts.anywhere);
     var all = Array.isArray(file.fixes) ? file.fixes : [];
     var inside = all.filter(function (f) {
-      return Array.isArray(f) && isFinite(f[0]) && isFinite(f[1]) && isFinite(f[2]) && inArea(f[1], f[2]);
+      return Array.isArray(f) && isFinite(f[0]) && isFinite(f[1]) && isFinite(f[2]) && (anywhere || inArea(f[1], f[2]));
     });
     if (inside.length > MAX_FIXES) inside = inside.slice(inside.length - MAX_FIXES);
     if (inside.length < 2) return null;
     var marks = [];
     (Array.isArray(file.marks) ? file.marks : []).forEach(function (m) {
       if (!Array.isArray(m) || !MARK_TYPES[m[1]] || !isFinite(m[0])) return;
-      var okPos = m[2] !== null && m[3] !== null && isFinite(m[2]) && isFinite(m[3]) && inArea(m[2], m[3]);
+      var okPos = m[2] !== null && m[3] !== null && isFinite(m[2]) && isFinite(m[3]) && (anywhere || inArea(m[2], m[3]));
       var out = okPos ? [m[0], m[1], m[2], m[3]] : [m[0], m[1], null, null];
       if (m[1] === 'start' && validLaps(m[6])) out.push(m[6]);    // スタートには周回数を付ける
       marks.push(out);

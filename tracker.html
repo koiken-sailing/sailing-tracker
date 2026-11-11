@@ -33,10 +33,21 @@
     <label class="field">ニックネーム
       <input id="name" type="text" autocomplete="off" maxlength="12" placeholder="例: さとう">
     </label>
-    <label class="check">
-      <input type="checkbox" id="opsMode">
-      <span>運営艇として記録する<small>マークを打った位置とスタート信号の時刻も記録します</small></span>
-    </label>
+    <fieldset class="modes">
+      <legend>使い方</legend>
+      <label class="check">
+        <input type="radio" name="mode" value="racer" checked>
+        <span>選手として記録する<small>航跡を記録します</small></span>
+      </label>
+      <label class="check">
+        <input type="radio" name="mode" value="practice">
+        <span>マーク練習（自分でマークを打つ）<small>航跡に加えて、上マークと下マークを打った位置を記録します。レースの判定はしません</small></span>
+      </label>
+      <label class="check">
+        <input type="radio" name="mode" value="ops">
+        <span>運営艇として記録する<small>マークを打った位置とスタート信号の時刻も記録します</small></span>
+      </label>
+    </fieldset>
     <div id="pubBox" hidden>
       <label class="check">
         <input type="checkbox" id="pubMode" checked>
@@ -46,6 +57,7 @@
         <input id="pass" type="text" autocomplete="off" autocapitalize="none" spellcheck="false" maxlength="40" placeholder="部で決めた合言葉">
       </label>
     </div>
+    <p class="landnote" id="landNote" hidden>陸上テスト用の入口から開いています。この記録は、陸の上の位置もそのまま観戦ページに公開されます。自宅など、知られたくない場所では使わないでください。</p>
     <p class="err" id="setupErr" hidden></p>
     <button class="btn primary" id="btnStart" type="button">記録を開始</button>
     <p class="note" id="setupNote">記録はこのスマホの中にだけ保存されます。どこにも送信されません。</p>
@@ -69,6 +81,7 @@
       <button class="btn" id="btnFin" type="button">フィニッシュマークを打った</button>
       <ul class="ops-list" id="opsMarks"></ul>
 
+      <div id="opsStartBox">
       <h2>スタート</h2>
       <label class="pick">周回数
         <select id="opsLaps">
@@ -84,6 +97,8 @@
       <button class="btn quiet" id="btnStartCancel" type="button" hidden>直前のスタートを取り消す</button>
       <ul class="ops-list" id="opsStarts"></ul>
       <p class="note">スタート信号の瞬間の、このスマホの位置を本部船の位置として記録します。周回数も、そのスタートと一緒に記録します。</p>
+      <p class="note">スタート手順では、4分前・1分前・スタートの瞬間に音が鳴ります。スマホの音量を上げておいてください。</p>
+      </div>
     </div>
 
     <button class="btn primary" id="btnDark" type="button">航海モードにする</button>

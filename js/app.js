@@ -179,6 +179,10 @@
     var up = G.vec(upBearing()), right = G.vec(upBearing() + 90);
     var minU = Infinity, maxU = -Infinity, minR = Infinity, maxR = -Infinity;
     var pts = [course.cb, course.marks.m1, course.marks.m4, course.marks.pin, course.marks.fin];
+    if (imported && imported.practice) {
+      pts = [];
+      RT.course.MARKS.forEach(function (m) { if (imported.practice[m.key]) pts.push(course.marks[m.key]); });
+    }
     if (imported && sim) {
       // 読み込んだ航跡は、コースの外まで広がっていることがあるので、航跡も収まるようにする
       sim.boats.forEach(function (b) {
@@ -211,16 +215,21 @@
     courseGroup.clearLayers();
     var M = course.marks;
     var faint = { renderer: canvas, color: '#5b6b7a', weight: 1, opacity: 0.6, dashArray: '4 6', interactive: false };
-    L.polyline([toLL(M.m4), toLL(M.m1)], faint).addTo(courseGroup);
-    L.polyline([toLL(M.m4), toLL(course.finMid)], faint).addTo(courseGroup);
-    L.polyline([toLL(course.cb), toLL(M.pin)],
-      { renderer: canvas, color: '#17212b', weight: 2.5, dashArray: '7 6', interactive: false }).addTo(courseGroup);
-    L.polyline([toLL(course.cb), toLL(M.fin)],
-      { renderer: canvas, color: '#0b6bd3', weight: 3.5, interactive: false }).addTo(courseGroup);
+    // マーク練習の日は、記録されたマークだけを描く（本部船・スタートライン・フィニッシュラインは無い）
+    var practice = imported && imported.practice;
+    if (!practice || (practice.m1 && practice.m4)) L.polyline([toLL(M.m4), toLL(M.m1)], faint).addTo(courseGroup);
+    if (!practice) {
+      L.polyline([toLL(M.m4), toLL(course.finMid)], faint).addTo(courseGroup);
+      L.polyline([toLL(course.cb), toLL(M.pin)],
+        { renderer: canvas, color: '#17212b', weight: 2.5, dashArray: '7 6', interactive: false }).addTo(courseGroup);
+      L.polyline([toLL(course.cb), toLL(M.fin)],
+        { renderer: canvas, color: '#0b6bd3', weight: 3.5, interactive: false }).addTo(courseGroup);
+    }
 
     // 運営艇の記録から来たコースには「設計上の目標位置」が無いので、目標とのずれは描かない
     var showTargets = !(imported && imported.fromOps);
     RT.course.MARKS.forEach(function (m) {
+      if (practice && !practice[m.key]) return;
       if (showTargets && course.moved[m.key] != null) {
         L.polyline([toLL(course.targets[m.key]), toLL(M[m.key])],
           { renderer: canvas, color: '#f26a1b', weight: 1.5, dashArray: '3 4', interactive: false }).addTo(courseGroup);
@@ -241,14 +250,16 @@
       });
     });
 
-    var cbm = L.marker(toLL(course.cb), {
-      draggable: true, icon: markIcon('本', '本部船', true), zIndexOffset: 600, title: '本部船'
-    }).addTo(courseGroup);
-    cbm.on('dragend', function () {
-      var p = cbm.getLatLng();
-      setCb(p.lat, p.lng);
-      save(); rebuild(true);
-    });
+    if (!practice) {
+      var cbm = L.marker(toLL(course.cb), {
+        draggable: true, icon: markIcon('本', '本部船', true), zIndexOffset: 600, title: '本部船'
+      }).addTo(courseGroup);
+      cbm.on('dragend', function () {
+        var p = cbm.getLatLng();
+        setCb(p.lat, p.lng);
+        save(); rebuild(true);
+      });
+    }
 
     $('windDeg').textContent = G.fmtDeg(curParams().windMag);
     applyOrientation();
@@ -344,7 +355,8 @@
     var key = (imported ? 'import:' + imported.serial + ':' : 'sim:') + N;
     if (key !== fleetKey) { fleetKey = key; resetFleetDom(); }
     gates = RT.race.gates(course);
-    events = RT.race.analyze(gates, sim.boats);
+    // マーク練習は、スタートやフィニッシュの判定をしない（航跡とマークだけを見せる）
+    events = imported && imported.practice ? sim.boats.map(function () { return []; }) : RT.race.analyze(gates, sim.boats);
     ll = sim.boats.map(function (b) {
       var arr = new Array(sim.n);
       for (var k = 0; k < sim.n; k++) {
@@ -455,12 +467,13 @@
     var sub = signalLabel();
     if (t >= 0 && nFin === N) sub = '全艇フィニッシュ';
     else if (t >= 0 && nFin > 0) sub = 'レース中・フィニッシュ ' + nFin + '/' + N + '艇';
-    else if (t >= 0 && imported) sub = '記録の再生';
+    else if (t >= 0 && imported) sub = imported.practice ? 'マーク練習の再生' : '記録の再生';
     // 読み込んだ航跡は、実際の時刻も添える
     if (imported) sub = clockOfDay(imported.startMs + t * 1000) + '　' + sub;
     $('clockSub').textContent = sub;
     $('seek').value = Math.round(t);
-    $('raceStatus').textContent = (imported ? '読み込んだ航跡・' : '') + (t < 0 ? 'スタート前（' + signalLabel() + '）' :
+    $('raceStatus').textContent = imported && imported.practice ? '読み込んだ航跡・マーク練習（順位の判定はしません）' :
+      (imported ? '読み込んだ航跡・' : '') + (t < 0 ? 'スタート前（' + signalLabel() + '）' :
       nFin === N ? 'レース終了' : nFin === 0 && imported ? 'スタート後' : 'レース中');
   }
 
@@ -495,7 +508,7 @@
       br.rank.textContent = r.rank === null ? '–' : r.rank;
       br.sail.textContent = b.sail;
       br.name.textContent = b.name;
-      br.st.textContent = r.status;
+      br.st.textContent = imported && imported.practice ? '練習' : r.status;
       br.spd.textContent = fmtKt(boatAt(r.i, t).spd);
       var gap = '';
       if (r.finished) {
@@ -904,8 +917,13 @@
     // 運営艇がスタート信号とマークの位置を記録していれば、それでスタート時刻とコースを決める
     next.starts = RT.importer.starts(tracks);
     if (next.starts.length) next.startMs = next.starts[0];
-    var oc = RT.importer.opsCourse(tracks, next.startMs);
-    if (oc) {
+    // スタートの記録が無く、マークを打った位置だけがある日は「マーク練習」として表示する
+    var pc = next.starts.length ? null : RT.importer.practiceCourse(tracks, state.params.windMag);
+    var oc = pc ? null : RT.importer.opsCourse(tracks, next.startMs);
+    if (pc) {
+      next.relocate = pc.relocate; next.overrides = pc.overrides; next.fromOps = true;
+      next.practice = pc.found;      // どのマークが記録されているか { m1, m4, fin }
+    } else if (oc) {
       next.relocate = oc.relocate; next.overrides = oc.overrides; next.fromOps = true;
     } else {
       // いつものコースから5km以上離れた記録（陸上での試し撮りなど）は、表示の間だけ本部船を航跡の出発点に置く
@@ -932,7 +950,7 @@
     fitCourse();
     syncUrl();
     toast(tracks.length + '件の航跡を読み込みました。' +
-      (next.fromOps ? '運営艇の記録からコースを設定しました。' : '') +
+      (next.practice ? 'マーク練習の記録です。' : next.fromOps ? '運営艇の記録からコースを設定しました。' : '') +
       (errors.length ? '読めなかったファイルが' + errors.length + '件あります。' : ''));
     return true;
   }
@@ -1071,7 +1089,8 @@
     $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
       (imported.day ? dayLabel(imported.day) + 'の公開された記録です。' : '') +
       imported.racers.length + '艇の航跡を表示しています。' +
-      (imported.fromOps ? '運営艇の記録から、コースとスタート時刻を設定しました。保存してあるコースは変わりません。' :
+      (imported.practice ? 'マーク練習の記録です。打ったマークの位置を表示しています。順位やスタートの判定はしません。' :
+        imported.fromOps ? '運営艇の記録から、コースとスタート時刻を設定しました。保存してあるコースは変わりません。' :
         imported.relocate ? 'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
     if (!on) return;
     $('startTime').value = toLocalInput(imported.startMs);
