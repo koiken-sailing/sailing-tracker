@@ -13,6 +13,9 @@
   var MAX_HOURS = 12;
   var MARK_TYPES = { m1: 1, m4: 1, fin: 1, start: 1, 'start-cancel': 1 };
   var PRE_MS = 6 * 60 * 1000;   // レースの表示は、スタートの6分前から（5分前の予告信号が入るように）
+  // 同じマークをこれ以上あけて打ち直したら「マークの設定を変えた」とみなして、セッションを分ける。
+  // これより短い間隔の打ち直しは、押し間違いの訂正として位置を置き換えるだけにする。
+  var SESSION_GAP_MS = 3 * 60 * 1000;
 
   function median(arr) {
     if (!arr.length) return null;
@@ -186,15 +189,46 @@
     return laps;
   }
 
+  /* マークの設定ごとの区切り（セッション）。戻り値は [{ t: 始まりの時刻, marks: { m1, m4, fin } }]。
+   *   同じマークを3分以上あけて打ち直したら、そこから新しいセッション。
+   *   新しいセッションは、前のセッションのマークを引き継ぐ（上マークだけ動かした、という場合のため）。
+   *   引き継いだだけのマークを打ち直しても、セッションは分けない（上下を続けて動かしても1つにまとまる）。 */
+  function sessions(tracks) {
+    var out = [], cur = null;
+    allMarks(tracks).forEach(function (m) {
+      if ((m.type !== 'm1' && m.type !== 'm4' && m.type !== 'fin') || m.lat === null) return;
+      if (!cur) {
+        cur = { t: m.t, marks: {}, at: {} };
+      } else if (cur.at[m.type] !== undefined && m.t - cur.at[m.type] >= SESSION_GAP_MS) {
+        out.push(cur);
+        var carried = {};
+        Object.keys(cur.marks).forEach(function (k) { carried[k] = cur.marks[k]; });
+        cur = { t: m.t, marks: carried, at: {} };
+      }
+      cur.marks[m.type] = { lat: m.lat, lon: m.lon };
+      cur.at[m.type] = m.t;
+    });
+    if (cur) out.push(cur);
+    return out;
+  }
+
+  /* あるセッションとして見せる時間帯。最初のセッションは記録の最初から、最後のセッションは記録の最後まで。 */
+  function sessionWindow(list, idx) {
+    return {
+      fromMs: idx > 0 ? list[idx].t : -Infinity,
+      toMs: idx + 1 < list.length ? list[idx + 1].t : Infinity
+    };
+  }
+
   /* マーク練習の日（スタートの記録が無く、マークを打った位置だけがある日）のコース。
-   * 上マーク・下マークは、それぞれ最後に打った位置を使う。どちらも無ければ null。
+   * idx はセッションの番号（0から）。上マークも下マークも無ければ null。
    * 本部船やスタートラインは使わないが、コースの計算に置き場所が要るので、下マークの横に仮置きする。
    * windMagFallback は、マークが1個しか無くて風軸を決められないときに使う値。 */
-  function practiceCourse(tracks, windMagFallback) {
-    var last = {};
-    allMarks(tracks).forEach(function (m) {
-      if ((m.type === 'm1' || m.type === 'm4' || m.type === 'fin') && m.lat !== null) last[m.type] = m;
-    });
+  function practiceCourse(tracks, windMagFallback, idx) {
+    var list = sessions(tracks);
+    if (!list.length) return null;
+    var index = Math.max(0, Math.min(list.length - 1, idx || 0));
+    var last = list[index].marks;
     if (!last.m1 && !last.m4) return null;
     var overrides = {}, found = {};
     ['m1', 'm4', 'fin'].forEach(function (key) {
@@ -210,7 +244,10 @@
       windMag = Math.round(G.norm360(brg + decl)) % 360;
     }
     var side = proj.toLatLon(G.offset({ x: 0, y: 0 }, G.norm360(windMag - decl + 90), 100));
-    return { relocate: { lat: side.lat, lon: side.lon, windMag: windMag }, overrides: overrides, found: found };
+    return {
+      relocate: { lat: side.lat, lon: side.lon, windMag: windMag }, overrides: overrides, found: found,
+      sessions: list, index: index
+    };
   }
 
   /* 運営艇の記録から、あるスタート時刻のレースのコースを組み立てる。運営艇の記録が無ければ null。
@@ -256,6 +293,7 @@
   RT.importer = {
     parse: parse, build: build, MAX_ACC: MAX_ACC,
     starts: starts, opsCourse: opsCourse, positionAt: positionAt,
-    raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS, practiceCourse: practiceCourse
+    raceWindow: raceWindow, lapsAt: lapsAt, PRE_MS: PRE_MS, practiceCourse: practiceCourse,
+    sessions: sessions, sessionWindow: sessionWindow, SESSION_GAP_MS: SESSION_GAP_MS
   };
 })(typeof window !== 'undefined' ? window : globalThis);

@@ -342,8 +342,10 @@
     course = RT.course.build(curParams(), curOverrides());
     if (imported) {
       // 運営艇がスタートを記録している日は、選んだレースの時間帯だけを取り出す
+      // マーク練習の日は、選んだセッション（マークの設定ごとの区切り）の時間帯だけを取り出す
       sim = RT.importer.build(imported.racers, course, imported.startMs,
-        RT.importer.raceWindow(imported.starts, imported.startMs));
+        imported.practice && imported.sessions ? RT.importer.sessionWindow(imported.sessions, imported.session) :
+          RT.importer.raceWindow(imported.starts, imported.startMs));
       fleet = imported.racers.map(function (tr) {
         return { sail: tr.sail || '—', name: tr.name || tr.sail || '名前なし' };
       });
@@ -918,11 +920,13 @@
     next.starts = RT.importer.starts(tracks);
     if (next.starts.length) next.startMs = next.starts[0];
     // スタートの記録が無く、マークを打った位置だけがある日は「マーク練習」として表示する
-    var pc = next.starts.length ? null : RT.importer.practiceCourse(tracks, state.params.windMag);
+    var pc = next.starts.length ? null : RT.importer.practiceCourse(tracks, state.params.windMag, 0);
     var oc = pc ? null : RT.importer.opsCourse(tracks, next.startMs);
     if (pc) {
       next.relocate = pc.relocate; next.overrides = pc.overrides; next.fromOps = true;
       next.practice = pc.found;      // どのマークが記録されているか { m1, m4, fin }
+      next.sessions = pc.sessions;   // マークの設定ごとの区切り。打ち直すたびに1つ増える
+      next.session = 0;
     } else if (oc) {
       next.relocate = oc.relocate; next.overrides = oc.overrides; next.fromOps = true;
     } else {
@@ -991,6 +995,33 @@
     syncUrl();
   }
 
+  /* マーク練習の日に、見るセッション（マークの設定ごとの区切り）を切り替える */
+  function chooseSession(idx) {
+    if (!imported || !imported.practice || !imported.sessions || !imported.sessions[idx]) return;
+    var pc = RT.importer.practiceCourse(imported.tracks, state.params.windMag, idx);
+    if (!pc) return;
+    var prev = { startMs: imported.startMs, relocate: imported.relocate, overrides: imported.overrides, practice: imported.practice, session: imported.session };
+    // 時刻の基準は、そのセッションの始まり（最初のセッションは記録の先頭）
+    var first = Infinity;
+    imported.tracks.forEach(function (tr) { first = Math.min(first, tr.first); });
+    imported.startMs = idx > 0 ? imported.sessions[idx].t : Math.floor(first / 1000) * 1000;
+    imported.relocate = pc.relocate; imported.overrides = pc.overrides; imported.practice = pc.found; imported.session = idx;
+    try {
+      rebuild(false);
+    } catch (e) {
+      Object.keys(prev).forEach(function (k) { imported[k] = prev[k]; });
+      rebuild(false);
+      renderData();
+      toast(e.message);
+      return;
+    }
+    setPlaying(false);
+    fillInputs();
+    renderData();
+    fitCourse();
+    syncUrl();
+  }
+
   // ---------- 公開された記録（js/cloud.js）の読み込み ----------
   var cloud = RT.cloud, cloudOn = !!(cloud && cloud.enabled());
   var cloudBusy = false;
@@ -1009,6 +1040,7 @@
       q = '?day=' + imported.day;
       var r = imported.starts.indexOf(imported.startMs);
       if (r > 0) q += '&race=' + (r + 1);
+      if (imported.practice && imported.session > 0) q += '&session=' + (imported.session + 1);
     }
     try { history.replaceState(null, '', location.pathname + q); } catch (e) { /* 変えられなくても続ける */ }
   }
@@ -1027,8 +1059,9 @@
       '記録ページで「観戦ページに公開する」を選んだ記録が、日付ごとに並びます。' : 'まだ公開された記録がありません。';
   }
 
-  /* ある日の公開された記録を読み込んで表示する。race は見たいレースの番号（1から。0なら最初）。 */
-  function loadCloudDay(day, race) {
+  /* ある日の公開された記録を読み込んで表示する。
+   * race は見たいレースの番号、session は見たいセッションの番号（どちらも1から。0なら最初）。 */
+  function loadCloudDay(day, race, session) {
     if (cloudBusy) return;
     cloudBusy = true;
     $('btnCloudLoad').disabled = true;
@@ -1037,6 +1070,7 @@
       if (!items.length) { toast(dayLabel(day) + 'の記録はありません。'); return; }
       if (!importTexts(items, { day: day })) return;
       if (race > 1 && imported.starts[race - 1] !== undefined) chooseRace(race - 1);
+      if (session > 1 && imported.practice && imported.sessions[session - 1]) chooseSession(session - 1);
       if ($('cloudDay').querySelector('option[value="' + day + '"]')) $('cloudDay').value = day;
     }).catch(function (e) {
       toast(e && e.code === 'net' ? '通信できませんでした。電波のある場所で、もう一度試してください。' : '記録を読み込めませんでした。');
@@ -1050,15 +1084,16 @@
     $('cloudBox').hidden = !cloudOn;
     if (!cloudOn) return;
     // アドレスに ?day=2026-11-15（または ?day=latest）が付いていたら、その日の記録を最初から表示する
-    var want = null, race = 0;
+    var want = null, race = 0, session = 0;
     try {
       var q = new URLSearchParams(location.search);
       want = q.get('day');
       race = parseInt(q.get('race'), 10) || 0;
+      session = parseInt(q.get('session'), 10) || 0;
     } catch (e) { /* 読めなければ、ふつうに開く */ }
     $('btnCloudLoad').addEventListener('click', function () {
       var day = $('cloudDay').value;
-      if (DAY_RE.test(day)) loadCloudDay(day, 0);
+      if (DAY_RE.test(day)) loadCloudDay(day, 0, 0);
     });
     $('btnCopyUrl').addEventListener('click', function () {
       var url = location.href;
@@ -1072,10 +1107,10 @@
     cloud.days().then(function (list) {
       if (want === 'latest') want = list[0] || null;
       fillCloudDays(list, want);
-      if (want && DAY_RE.test(want)) loadCloudDay(want, race);
+      if (want && DAY_RE.test(want)) loadCloudDay(want, race, session);
     }).catch(function () {
       $('cloudInfo').textContent = '記録の一覧を読めませんでした。電波のある場所で、ページを開き直してください。';
-      if (want && DAY_RE.test(want)) loadCloudDay(want, race);
+      if (want && DAY_RE.test(want)) loadCloudDay(want, race, session);
     });
   }
 
@@ -1089,11 +1124,24 @@
     $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
       (imported.day ? dayLabel(imported.day) + 'の公開された記録です。' : '') +
       imported.racers.length + '艇の航跡を表示しています。' +
-      (imported.practice ? 'マーク練習の記録です。打ったマークの位置を表示しています。順位やスタートの判定はしません。' :
+      (imported.practice ? 'マーク練習の記録です。打ったマークの位置を表示しています。順位やスタートの判定はしません。' +
+        (imported.sessions && imported.sessions.length > 1 ? 'マークを打ち直すたびにセッションを分けています（全' + imported.sessions.length + 'セッション）。' : '') :
         imported.fromOps ? '運営艇の記録から、コースとスタート時刻を設定しました。保存してあるコースは変わりません。' :
         imported.relocate ? 'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
     if (!on) return;
     $('startTime').value = toLocalInput(imported.startMs);
+
+    // セッションの選択（マーク練習で、マークを打ち直しているとき）
+    var sesSel = $('sessionSel'), sesList = imported.practice && imported.sessions ? imported.sessions : [];
+    $('sessionRow').hidden = sesList.length < 2;
+    sesSel.textContent = '';
+    sesList.forEach(function (s, i) {
+      var until = i + 1 < sesList.length ? clockOfDay(sesList[i + 1].t) : '';
+      var opt = el('option', null, 'セッション' + (i + 1) + '（' + clockOfDay(s.t) + '〜' + until + '）');
+      opt.value = i;
+      sesSel.appendChild(opt);
+    });
+    if (sesList.length) sesSel.value = imported.session;
 
     // レースの選択（運営艇がスタート信号を記録しているとき）
     var raceSel = $('raceSel');
@@ -1260,6 +1308,7 @@
     });
     $('btnUseSim').addEventListener('click', clearImport);
     $('raceSel').addEventListener('change', function () { chooseRace(parseInt(this.value, 10)); });
+    $('sessionSel').addEventListener('change', function () { chooseSession(parseInt(this.value, 10)); });
     $('startTime').addEventListener('change', function () {
       if (!imported) return;
       var ms = new Date(this.value).getTime();

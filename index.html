@@ -178,6 +178,10 @@
         <button class="btn btn-primary" id="btnLoadTracks" type="button">航跡ファイルを読み込む</button>
         <p class="hint">スマホの記録画面で保存したファイルを選びます。複数まとめて選べます。読み込んだ航跡は、この画面を閉じると消えます（どこにも送信・保存しません）。</p>
         <div id="importBox" hidden>
+          <div class="row" id="sessionRow" hidden>
+            <label for="sessionSel">セッション</label>
+            <select id="sessionSel"></select>
+          </div>
           <div class="row" id="raceRow" hidden>
             <label for="raceSel">レース</label>
             <select id="raceSel"></select>

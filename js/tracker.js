@@ -163,6 +163,7 @@
     $('opsPanel').hidden = !(st.meta.ops || st.meta.practice);
     $('opsStartBox').hidden = !st.meta.ops;
     $('btnFin').hidden = !st.meta.ops;
+    $('sessionNote').hidden = !st.meta.practice;
     renderOps();
     showScreen('live');
     render();
@@ -220,6 +221,7 @@
   // 音は、鳴らす時刻をあらかじめ予約しておく。こうすると、画面の表示が一瞬止まっても時刻どおりに鳴る。
   // スマホのブラウザは、画面に触れた操作の中でしか音を出し始められないので、ボタンを押したときに予約する。
   var CUES = [[240, 0.7], [60, 1.2], [0, 1.8]];   // [スタートの何秒前か, 鳴らす長さ（秒）]
+  var PRE_COUNT = 5;                              // それぞれの何秒前から、短い音で予告するか
   var snd = { ctx: null, nodes: [], armedFor: null };
 
   function soundContext() {
@@ -233,10 +235,10 @@
       return snd.ctx;
     } catch (e) { return null; }
   }
-  function beepAt(ctx, when, dur) {
+  function beepAt(ctx, when, dur, freq) {
     var osc = ctx.createOscillator(), gain = ctx.createGain();
     osc.type = 'square';            // 屋外でも聞き取りやすい、硬めの音
-    osc.frequency.value = 880;
+    osc.frequency.value = freq || 880;
     gain.gain.setValueAtTime(0.0001, when);
     gain.gain.linearRampToValueAtTime(0.6, when + 0.01);
     gain.gain.setValueAtTime(0.6, when + dur - 0.05);
@@ -261,6 +263,10 @@
     CUES.forEach(function (c) {
       var wait = left - c[0];
       if (wait > -0.3) beepAt(ctx, ctx.currentTime + Math.max(0.02, wait), c[1]);
+      // 予告: 5・4・3・2・1秒前に、低めの短い音
+      for (var s = PRE_COUNT; s >= 1; s--) {
+        if (wait - s > 0.05) beepAt(ctx, ctx.currentTime + wait - s, 0.12, 660);
+      }
     });
     snd.armedFor = st.meta.seq;
   }

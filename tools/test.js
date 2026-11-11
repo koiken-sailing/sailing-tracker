@@ -504,7 +504,7 @@ console.log('9. マーク練習と陸上テスト');
   const fixes = [];
   for (let i = 0; i < 900; i++) { const q = c.latLon(G.offset(c.marks.m4, 200 + i * 0.4, 30 + (i % 300))); fixes.push([T + i * 1000, q.lat, q.lon, 5, 2, 0]); }
   const file = { format: 'yacht-track', version: 1, sail: '300', name: 'れんしゅう', ops: false, practice: true, fixes,
-    marks: [[T + 60000, 'm1', old.lat, old.lon, 5, 100], [T + 120000, 'm4', m4.lat, m4.lon, 5, 100], [T + 300000, 'm1', m1.lat, m1.lon, 5, 100]] };
+    marks: [[T + 60000, 'm1', old.lat, old.lon, 5, 100], [T + 120000, 'm4', m4.lat, m4.lon, 5, 100], [T + 150000, 'm1', m1.lat, m1.lon, 5, 100]] };   // 上マークは30秒後に押し直した（訂正）
   const tr = RT.importer.parse(JSON.stringify(C.unpack(C.pack(file).rec)), 'p');
   const other = RT.importer.parse(JSON.stringify({ format: 'yacht-track', version: 1, sail: '301', name: 'ほか', ops: false, marks: [], fixes }), 'o');
   ok(tr.ops === false && tr.marks.length === 3, 'マークを打った選手は、運営艇ではなく選手として扱う');
@@ -513,7 +513,7 @@ console.log('9. マーク練習と陸上テスト');
   ok(pc && pc.found.m1 && pc.found.m4 && !pc.found.fin, '上マークと下マークを取り出す（フィニッシュマークは無い）');
   const c2 = RT.course.build(Object.assign({}, RT.course.DEFAULTS, pc.relocate), pc.overrides);
   const back = pt => { const q = c2.latLon(pt); return c.proj.toXY(q.lat, q.lon); };
-  near(G.dist(back(c2.marks.m1), c.marks.m1), 0, 0.5, '上マークは、最後に打った位置');
+  near(G.dist(back(c2.marks.m1), c.marks.m1), 0, 0.5, '上マークは、押し直した後の位置');
   near(G.dist(back(c2.marks.m4), c.marks.m4), 0, 0.5, '下マークの位置');
   near(G.norm180(pc.relocate.windMag - p.windMag), 0, 1, '風軸は、下マークから上マークを見た向き');
   near(G.dist(back(c2.cb), c.marks.m4), 100, 1, '本部船は下マークの横に仮置き（表示はしない）');
@@ -522,6 +522,39 @@ console.log('9. マーク練習と陸上テスト');
   const pc1 = RT.importer.practiceCourse([one], 135);
   ok(pc1 && pc1.found.m1 && !pc1.found.m4 && pc1.relocate.windMag === 135, 'マークが1個だけなら、風軸は画面の設定を使う');
   ok(RT.importer.practiceCourse([other], 10) === null, 'マークの記録が無ければ、マーク練習として扱わない');
+
+  // マークを打ち直したら、セッションを分ける
+  {
+    const moved = c.latLon(G.offset(c.marks.m1, 270, 120)), m4b = c.latLon(G.offset(c.marks.m4, 90, 60)), m1c = c.latLon(G.offset(c.marks.m1, 0, 80));
+    const day = Object.assign({}, file, { marks: file.marks.concat([
+      [T + 600000, 'm1', moved.lat, moved.lon, 5, 100],     // 10分後に上マークを動かした → セッション2
+      [T + 660000, 'm4', m4b.lat, m4b.lon, 5, 100],         // 続けて下マークも動かした → 同じセッション2
+      [T + 700000, 'm4', m4.lat, m4.lon, 5, 100],           // 40秒後に押し直し → 訂正（セッションは増えない）
+      [T + 1500000, 'm1', m1c.lat, m1c.lon, 5, 100]         // さらに後で上マークだけ動かした → セッション3
+    ]) });
+    const trD = RT.importer.parse(JSON.stringify(C.unpack(C.pack(day).rec)), 'd');
+    const ses = RT.importer.sessions([trD, other]);
+    ok(ses.length === 3, 'マークを打ち直すたびにセッションが増える (' + ses.length + ')');
+    ok(RT.importer.sessions([tr]).length === 1, '3分以内の押し直しは訂正として扱い、セッションを分けない');
+    ok(ses[0].t === T + 60000 && ses[1].t === T + 600000 && ses[2].t === T + 1500000, 'セッションの始まりは、最初に打ち直した時刻');
+    near(ses[0].marks.m1.lat, m1.lat, 1e-6, 'セッション1の上マークは、訂正後の位置');
+    near(ses[1].marks.m1.lat, moved.lat, 1e-6, 'セッション2の上マークは動かした位置');
+    near(ses[1].marks.m4.lat, m4.lat, 1e-6, 'セッション2の下マークは、押し直した後の位置');
+    near(ses[2].marks.m4.lat, m4.lat, 1e-6, 'セッション3は、動かしていない下マークを引き継ぐ');
+    near(ses[2].marks.m1.lat, m1c.lat, 1e-6, 'セッション3の上マークは新しい位置');
+    const w0 = RT.importer.sessionWindow(ses, 0), w1 = RT.importer.sessionWindow(ses, 1), w2 = RT.importer.sessionWindow(ses, 2);
+    ok(w0.fromMs === -Infinity && w0.toMs === ses[1].t, '最初のセッションは、記録の最初から次の打ち直しまで');
+    ok(w1.fromMs === ses[1].t && w1.toMs === ses[2].t && w2.toMs === Infinity, '途中と最後のセッションの時間帯');
+    const pcB = RT.importer.practiceCourse([trD, other], 10, 1);
+    ok(pcB.index === 1 && pcB.sessions.length === 3, 'セッションを番号で選べる');
+    near(pcB.overrides.m1.lat, moved.lat, 1e-6, '選んだセッションのマークでコースを作る');
+    const cS = RT.course.build(Object.assign({}, RT.course.DEFAULTS, pcB.relocate), pcB.overrides);
+    const dS = RT.importer.build([trD, other], cS, ses[1].t, w1);
+    ok(dS.t0 === 0 && dS.tEnd === 899 - 600, 'セッション2の時間のバーは、そのセッションの始まりから（記録は899秒まで）(' + dS.t0 + '〜' + dS.tEnd + '秒)');
+    const dS0 = RT.importer.build([trD, other], cS, T, w0);
+    ok(dS0.t0 === 0 && dS0.tEnd === 600, 'セッション1の時間のバーは、次の打ち直しまで (' + dS0.tEnd + '秒)');
+    ok(RT.importer.practiceCourse([trD], 10, 99).index === 2, '範囲外の番号は、最後のセッションに丸める');
+  }
 
   // 陸上テスト用の入口から始めた記録だけ、範囲の外でも送る
   const land = [];
