@@ -33,6 +33,10 @@
     <label class="field">名前
       <input id="name" type="text" autocomplete="off" maxlength="12" placeholder="例: 佐藤">
     </label>
+    <label class="check">
+      <input type="checkbox" id="opsMode">
+      <span>運営艇として記録する<small>マークを打った位置とスタート信号の時刻も記録します</small></span>
+    </label>
     <p class="err" id="setupErr" hidden></p>
     <button class="btn primary" id="btnStart" type="button">記録を開始</button>
     <p class="note">記録はこのスマホの中にだけ保存されます。どこにも送信されません。</p>
@@ -47,6 +51,24 @@
       <div class="cell"><span class="lab">艇速</span><span class="val" id="vSpd">–</span></div>
     </div>
     <p class="status" id="vStatus" role="status"></p>
+
+    <div class="ops" id="opsPanel" hidden>
+      <h2>マークの位置</h2>
+      <p class="note">マークを打った場所で押してください。1回目で位置を覚え、2回目で確定します。打ち直したときは、もう一度押せば新しい位置に置き換わります。</p>
+      <button class="btn" id="btnM1" type="button">上マークを打った</button>
+      <button class="btn" id="btnM4" type="button">下マークを打った</button>
+      <button class="btn" id="btnFin" type="button">フィニッシュマークを打った</button>
+      <ul class="ops-list" id="opsMarks"></ul>
+
+      <h2>スタート</h2>
+      <p class="countdown" id="opsCountdown" hidden></p>
+      <button class="btn primary" id="btnSeq" type="button">スタート手順を開始（5分前）</button>
+      <button class="btn" id="btnStartNow" type="button">いまスタート信号を出した</button>
+      <button class="btn quiet" id="btnStartCancel" type="button" hidden>直前のスタートを取り消す</button>
+      <ul class="ops-list" id="opsStarts"></ul>
+      <p class="note">スタート信号の瞬間の、このスマホの位置を本部船の位置として記録します。</p>
+    </div>
+
     <button class="btn primary" id="btnDark" type="button">航海モードにする</button>
     <p class="note">航海モードは、画面を真っ黒にしてタッチを受け付けなくします。防水ケースに入れる直前に押してください。記録は続きます。</p>
     <button class="btn danger" id="btnStop" type="button">記録を終了</button>

@@ -81,6 +81,30 @@ body {
 .status.bad { color: var(--danger); }
 .status.good { color: #17753a; }
 
+.check { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 16px; font-weight: 600; }
+.check input { width: 22px; height: 22px; margin: 2px 0 0; flex: none; }
+.check small { display: block; font-weight: 400; font-size: 13px; color: var(--muted); }
+
+/* 運営艇の記録 */
+.ops { margin: 4px 0 16px; padding: 14px 14px 2px; border: 1px solid var(--line); border-radius: 10px; background: #f8fafc; }
+.ops h2 { margin: 6px 0 6px; }
+.btn.armed { border-color: var(--accent); background: #e8f1fc; color: var(--accent); }
+.btn.danger.armed { background: var(--danger); border-color: var(--danger); color: #fff; }
+.btn.primary.armed { background: #0a56a8; color: #fff; }
+.ops-list { margin: 0 0 14px; padding: 0; list-style: none; font-size: 14px; font-variant-numeric: tabular-nums; }
+.ops-list li { padding: 4px 0; border-bottom: 1px solid var(--line); }
+.ops-list li.none { color: var(--muted); }
+.countdown {
+  margin: 0 0 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: var(--navy);
+  color: #fff;
+  text-align: center;
+}
+.countdown b { display: block; font-size: 40px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.countdown span { display: block; font-size: 14px; color: #b9c8da; }
+
 .tips ul { margin: 0; padding-left: 1.2em; font-size: 14px; color: var(--muted); }
 .tips li { margin-bottom: 6px; }
 

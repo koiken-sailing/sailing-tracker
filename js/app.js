@@ -217,8 +217,10 @@
     L.polyline([toLL(course.cb), toLL(M.fin)],
       { renderer: canvas, color: '#0b6bd3', weight: 3.5, interactive: false }).addTo(courseGroup);
 
+    // 運営艇の記録から来たコースには「設計上の目標位置」が無いので、目標とのずれは描かない
+    var showTargets = !(imported && imported.fromOps);
     RT.course.MARKS.forEach(function (m) {
-      if (course.moved[m.key] != null) {
+      if (showTargets && course.moved[m.key] != null) {
         L.polyline([toLL(course.targets[m.key]), toLL(M[m.key])],
           { renderer: canvas, color: '#f26a1b', weight: 1.5, dashArray: '3 4', interactive: false }).addTo(courseGroup);
         L.marker(toLL(course.targets[m.key]), {
@@ -247,7 +249,7 @@
       save(); rebuild(true);
     });
 
-    $('windDeg').textContent = G.fmtDeg(state.params.windMag);
+    $('windDeg').textContent = G.fmtDeg(curParams().windMag);
     applyOrientation();
   }
 
@@ -327,8 +329,8 @@
   function rebuild(keepTime) {
     course = RT.course.build(curParams(), curOverrides());
     if (imported) {
-      sim = RT.importer.build(imported.tracks, course, imported.startMs);
-      fleet = imported.tracks.map(function (tr) {
+      sim = RT.importer.build(imported.racers, course, imported.startMs);
+      fleet = imported.racers.map(function (tr) {
         return { sail: tr.sail || '—', name: tr.name || tr.sail || '名前なし' };
       });
     } else {
@@ -716,8 +718,14 @@
   ];
 
   function fillInputs() {
-    FIELDS.forEach(function (f) { $(f[0]).value = state.params[f[1]]; });
-    $('pWindRange').value = state.params.windMag;
+    var p = curParams();
+    FIELDS.forEach(function (f) { $(f[0]).value = p[f[1]]; });
+    $('pWindRange').value = p.windMag;
+  }
+  /* 設定値の書き込み先。読み込んだ記録が風軸を決めている間は、風軸だけはその場かぎりの値を書き換える。 */
+  function setParam(key, v) {
+    if (imported && imported.relocate && imported.relocate[key] !== undefined) imported.relocate[key] = v;
+    else state.params[key] = v;
   }
 
   function markRow(name, pt, extra, right) {
@@ -750,9 +758,9 @@
     tb.textContent = '';
     tb.appendChild(markRow('本部船', course.cb, null, '基準'));
     RT.course.MARKS.forEach(function (m) {
-      var mv = course.moved[m.key];
+      var mv = imported && imported.fromOps ? null : course.moved[m.key];
       tb.appendChild(markRow(m.name, M[m.key],
-        mv != null ? '目標から ' + Math.round(mv) + 'm' : null,
+        mv != null ? '目標から ' + Math.round(mv) + 'm' : (imported && imported.fromOps && curOverrides()[m.key] ? '運営艇の記録' : null),
         '本部船から ' + brgDist(course.cb, M[m.key])));
     });
 
@@ -785,14 +793,14 @@
         v = clamp(v, parseFloat(input.min), parseFloat(input.max));
         if (f[1] === 'laps') v = Math.round(v);
         if (f[1] === 'windMag') { v = G.norm360(v); $('pWindRange').value = v; }
-        state.params[f[1]] = v;
+        setParam(f[1], v);
         scheduleRebuild();
       });
-      input.addEventListener('change', function () { input.value = state.params[f[1]]; });
+      input.addEventListener('change', function () { input.value = curParams()[f[1]]; });
     });
     $('pWindRange').addEventListener('input', function () {
-      state.params.windMag = parseFloat(this.value);
-      $('pWind').value = state.params.windMag;
+      setParam('windMag', parseFloat(this.value));
+      $('pWind').value = curParams().windMag;
       scheduleRebuild();
     });
     $('btnCbCenter').addEventListener('click', function () {
@@ -885,10 +893,22 @@
       startMs: Math.floor(first / 1000) * 1000,   // とりあえず記録の先頭をスタート時刻にしておく
       relocate: null, overrides: {}, serial: ++importSerial
     };
-    // いつものコースから5km以上離れた記録（陸上での試し撮りなど）は、表示の間だけ本部船を航跡の出発点に置く
-    var home = RT.course.build(state.params, state.overrides);
-    var p0 = home.proj.toXY(tracks[0].fixes[0].lat, tracks[0].fixes[0].lon);
-    if (Math.hypot(p0.x, p0.y) > 5000) next.relocate = { lat: tracks[0].fixes[0].lat, lon: tracks[0].fixes[0].lon };
+    // 運営艇の記録は順位表に入れない（運営艇の記録しか無いときは、それを表示する）
+    next.racers = tracks.filter(function (tr) { return !tr.ops; });
+    if (!next.racers.length) next.racers = tracks;
+    // 運営艇がスタート信号とマークの位置を記録していれば、それでスタート時刻とコースを決める
+    next.starts = RT.importer.starts(tracks);
+    if (next.starts.length) next.startMs = next.starts[0];
+    var oc = RT.importer.opsCourse(tracks, next.startMs);
+    if (oc) {
+      next.relocate = oc.relocate; next.overrides = oc.overrides; next.fromOps = true;
+    } else {
+      // いつものコースから5km以上離れた記録（陸上での試し撮りなど）は、表示の間だけ本部船を航跡の出発点に置く
+      var home = RT.course.build(state.params, state.overrides);
+      var f0 = next.racers[0].fixes[0];
+      var p0 = home.proj.toXY(f0.lat, f0.lon);
+      if (Math.hypot(p0.x, p0.y) > 5000) next.relocate = { lat: f0.lat, lon: f0.lon };
+    }
 
     var prev = imported;
     imported = next;
@@ -900,10 +920,13 @@
       toast(e.message);
       return false;
     }
+    if (next.starts.length) { t = clamp(0, sim.t0, sim.tEnd); dirty = true; }   // スタートの瞬間を表示する
     setPlaying(false);
+    fillInputs();
     renderData();
     fitCourse();
-    toast(tracks.length + '艇の航跡を読み込みました。' +
+    toast(tracks.length + '件の航跡を読み込みました。' +
+      (next.fromOps ? '運営艇の記録からコースを設定しました。' : '') +
       (errors.length ? '読めなかったファイルが' + errors.length + '件あります。' : ''));
     return true;
   }
@@ -912,6 +935,22 @@
     imported = null;
     setPlaying(false);
     rebuild(false);
+    fillInputs();
+    renderData();
+    fitCourse();
+  }
+
+  /* 1日に複数レースある記録で、見るレースを切り替える */
+  function chooseRace(idx) {
+    if (!imported || imported.starts[idx] === undefined) return;
+    imported.startMs = imported.starts[idx];
+    var oc = RT.importer.opsCourse(imported.tracks, imported.startMs);
+    if (oc) { imported.relocate = oc.relocate; imported.overrides = oc.overrides; }
+    rebuild(false);
+    t = clamp(0, sim.t0, sim.tEnd);
+    dirty = true;
+    setPlaying(false);
+    fillInputs();
     renderData();
     fitCourse();
   }
@@ -923,23 +962,43 @@
     $('importBox').hidden = !on;
     $('crewSection').hidden = on;
     $('dataInfo').textContent = !on ? 'いまはシミュレーションの艇団を表示しています。' :
-      imported.tracks.length + '艇の航跡を表示しています。' + (imported.relocate ?
-        'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
+      imported.racers.length + '艇の航跡を表示しています。' +
+      (imported.fromOps ? '運営艇の記録から、コースとスタート時刻を設定しました。保存してあるコースは変わりません。' :
+        imported.relocate ? 'いつものコースから離れた場所の記録なので、本部船とマークを航跡の近くに仮置きしています。保存してあるコースは変わりません。' : '');
     if (!on) return;
     $('startTime').value = toLocalInput(imported.startMs);
+
+    // レースの選択（運営艇がスタート信号を記録しているとき）
+    var raceSel = $('raceSel');
+    $('raceRow').hidden = imported.starts.length === 0;
+    raceSel.textContent = '';
+    imported.starts.forEach(function (ms, i) {
+      var opt = el('option', null, '第' + (i + 1) + 'レース（' + clockOfDay(ms) + ' スタート）');
+      opt.value = i;
+      raceSel.appendChild(opt);
+    });
+    var cur = imported.starts.indexOf(imported.startMs);
+    if (cur >= 0) raceSel.value = cur;
+
     var tb = $('trackTable').querySelector('tbody');
     tb.textContent = '';
-    imported.tracks.forEach(function (tr, i) {
+    imported.tracks.forEach(function (tr) {
+      var idx = imported.racers.indexOf(tr);        // 順位表に出ている艇なら、その色
       var row = el('tr');
       var c0 = el('td');
       var dot = el('span', 'dot');
-      dot.style.background = color(i);
+      dot.style.background = idx >= 0 ? color(idx) : '#0c2340';
+      if (idx < 0) dot.style.borderRadius = '2px';
       c0.appendChild(dot);
-      c0.appendChild(document.createTextNode((tr.sail || '—') + '　' + (tr.name || '')));
+      c0.appendChild(document.createTextNode((tr.sail || '—') + '　' + (tr.name || '') + (tr.ops ? '（運営艇）' : '')));
       row.appendChild(c0);
       var c1 = el('td', 'pos');
       c1.appendChild(el('div', null, clockOfDay(tr.first) + ' 〜 ' + clockOfDay(tr.last)));
       c1.appendChild(el('div', null, tr.fixes.length + '点' + (tr.dropped ? '（精度の悪い' + tr.dropped + '点を除外）' : '')));
+      if (tr.ops) {
+        var nMark = tr.marks.filter(function (m) { return m.type === 'm1' || m.type === 'm4' || m.type === 'fin'; }).length;
+        c1.appendChild(el('div', null, 'マークの記録 ' + nMark + '件・スタート ' + RT.importer.starts([tr]).length + '件'));
+      }
       row.appendChild(c1);
       row.appendChild(el('td', null, tr.medAcc === null ? '' : '精度 ±' + Math.round(tr.medAcc) + 'm'));
       tb.appendChild(row);
@@ -1072,6 +1131,7 @@
       })).then(importTexts).catch(function () { toast('ファイルを読み込めませんでした。'); });
     });
     $('btnUseSim').addEventListener('click', clearImport);
+    $('raceSel').addEventListener('change', function () { chooseRace(parseInt(this.value, 10)); });
     $('startTime').addEventListener('change', function () {
       if (!imported) return;
       var ms = new Date(this.value).getTime();

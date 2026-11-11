@@ -11,6 +11,7 @@
   var MAX_ACC = 40;          // 精度（端末の自己申告）がこれより悪い点は使わない m
   var MIN_MOVE = 0.4;        // これより遅いときは針路を更新しない m/s
   var MAX_HOURS = 12;
+  var MARK_TYPES = { m1: 1, m4: 1, fin: 1, start: 1, 'start-cancel': 1 };
 
   function median(arr) {
     if (!arr.length) return null;
@@ -39,10 +40,26 @@
     var good = uniq.filter(function (p) { return p.acc === null || !isFinite(p.acc) || p.acc <= MAX_ACC; });
     var use = good.length >= 2 ? good : uniq;
     if (use.length < 2) throw new Error('位置の記録が足りません');
+
+    // 運営艇の記録（マークを打った位置、スタート信号）
+    var marks = [];
+    (Array.isArray(d.marks) ? d.marks : []).forEach(function (m) {
+      if (!Array.isArray(m) || !MARK_TYPES[m[1]]) return;
+      var mt = Number(m[0]);
+      if (!isFinite(mt)) return;
+      var mlat = m[2] === null || m[2] === undefined ? null : Number(m[2]);
+      var mlon = m[3] === null || m[3] === undefined ? null : Number(m[3]);
+      if (mlat === null || mlon === null || !isFinite(mlat) || !isFinite(mlon)) { mlat = null; mlon = null; }
+      marks.push({ t: mt, type: m[1], lat: mlat, lon: mlon });
+    });
+    marks.sort(function (a, b) { return a.t - b.t; });
+
     return {
       file: fileName || '',
       sail: String(d.sail === undefined ? '' : d.sail).slice(0, 12),
       name: String(d.name === undefined ? '' : d.name).slice(0, 20),
+      ops: !!d.ops || marks.length > 0,   // 運営艇の記録かどうか
+      marks: marks,
       fixes: use,
       total: uniq.length,
       dropped: uniq.length - use.length,     // 精度が悪くて捨てた点の数
@@ -113,5 +130,72 @@
     };
   }
 
-  RT.importer = { parse: parse, build: build, MAX_ACC: MAX_ACC };
+  /* 記録の中の、ある時刻の位置（前後の点から補間。範囲の外は端の位置） */
+  function positionAt(tr, ms) {
+    var fx = tr.fixes, last = fx.length - 1;
+    if (ms <= fx[0].t) return { lat: fx[0].lat, lon: fx[0].lon };
+    if (ms >= fx[last].t) return { lat: fx[last].lat, lon: fx[last].lon };
+    var lo = 0, hi = last;
+    while (hi - lo > 1) { var mid = (lo + hi) >> 1; if (fx[mid].t <= ms) lo = mid; else hi = mid; }
+    var f = (ms - fx[lo].t) / (fx[hi].t - fx[lo].t);
+    return { lat: fx[lo].lat + (fx[hi].lat - fx[lo].lat) * f, lon: fx[lo].lon + (fx[hi].lon - fx[lo].lon) * f };
+  }
+
+  function allMarks(tracks) {
+    var out = [];
+    tracks.forEach(function (tr) { (tr.marks || []).forEach(function (m) { out.push(m); }); });
+    return out.sort(function (a, b) { return a.t - b.t; });
+  }
+
+  /* 運営艇が記録したスタート信号の時刻の一覧（取り消されたものは除く）。1日に複数レースあれば複数になる。 */
+  function starts(tracks) {
+    var out = [];
+    allMarks(tracks).forEach(function (m) {
+      if (m.type === 'start') out.push(m.t);
+      else if (m.type === 'start-cancel') out.pop();
+    });
+    return out;
+  }
+
+  /* 運営艇の記録から、あるスタート時刻のレースのコースを組み立てる。運営艇の記録が無ければ null。
+   *   各マーク: そのスタート以前で最後に打った位置（無ければ、その後で最初に打った位置）
+   *   本部船:   スタート信号を押した位置（無ければ、その時刻の運営艇の位置）
+   *   風軸:     下マークから上マークを見た方位（両方あるとき）
+   * 戻り値の relocate はコース設定への上書き、overrides は実際に打ったマークの位置。 */
+  function opsCourse(tracks, startMs) {
+    var opsTracks = tracks.filter(function (tr) { return tr.ops; });
+    if (!opsTracks.length) return null;
+    var marks = allMarks(opsTracks);
+    function pick(type) {
+      var before = null, after = null;
+      marks.forEach(function (m) {
+        if (m.type !== type || m.lat === null) return;
+        if (m.t <= startMs) before = m; else if (!after) after = m;
+      });
+      return before || after;
+    }
+    var cb = null;
+    marks.forEach(function (m) {
+      if (m.type === 'start' && m.t === startMs && m.lat !== null) cb = { lat: m.lat, lon: m.lon };
+    });
+    if (!cb) cb = positionAt(opsTracks[0], startMs);
+
+    var relocate = { lat: cb.lat, lon: cb.lon }, overrides = {}, found = {};
+    ['m1', 'm4', 'fin'].forEach(function (key) {
+      var m = pick(key);
+      found[key] = !!m;
+      if (m) overrides[key] = { lat: m.lat, lon: m.lon };
+    });
+    if (found.m1 && found.m4) {
+      var proj = G.projection(overrides.m4.lat, overrides.m4.lon);
+      var brg = G.bearing({ x: 0, y: 0 }, proj.toXY(overrides.m1.lat, overrides.m1.lon));
+      relocate.windMag = Math.round(G.norm360(brg + G.declinationWest(cb.lat, cb.lon))) % 360;
+    }
+    return { relocate: relocate, overrides: overrides, found: found };
+  }
+
+  RT.importer = {
+    parse: parse, build: build, MAX_ACC: MAX_ACC,
+    starts: starts, opsCourse: opsCourse, positionAt: positionAt
+  };
 })(typeof window !== 'undefined' ? window : globalThis);

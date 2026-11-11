@@ -256,5 +256,80 @@ console.log('5. 航跡ファイルの読み込み');
   console.log('  模擬ファイル2艇: ' + data.n + '秒分に並べ直し');
 }
 
+// ---- 6. 運営艇の記録から、コースとスタート時刻を復元する ----
+console.log('6. 運営艇の記録からの復元');
+{
+  /* シミュレーションのレースを「スマホの記録ファイル」の形に書き出し、読み込み直す。
+   * 運営艇の記録（マークを打った位置・スタート信号）だけを手がかりにコースを組み立てて、
+   * 元のレースと同じ回航時刻が出れば、記録 → 読み込み → 判定の流れが通っている。 */
+  const p = Object.assign({}, RT.course.DEFAULTS, { windMag: 235, d14: 550, startLen: 120 });
+  const c = RT.course.build(p, {});
+  const sim = RT.sim.run(c, { n: 5, seed: 3 });
+  const gates = RT.race.gates(c);
+  const evTruth = RT.race.analyze(gates, sim.boats);
+  const T = 1794000000000;                       // スタート信号（sim の t=0）にあたる時刻
+  const tms = k => T + (sim.t0 + k) * 1000;
+  const iso = new Date(tms(0)).toISOString();
+  const files = sim.boats.map((b, i) => {
+    const fixes = [];
+    for (let k = 0; k < sim.n; k++) { const q = c.latLon({ x: b.x[k], y: b.y[k] }); fixes.push([tms(k), q.lat, q.lon, 5, b.spd[k], b.hdg[k]]); }
+    return JSON.stringify({ format: 'yacht-track', version: 1, sail: String(100 + i), name: '艇' + i, started: iso, fixes: fixes, ops: false, marks: [], log: [] });
+  });
+  const cb = c.latLon(c.cb), m1 = c.latLon(c.marks.m1), m4 = c.latLon(c.marks.m4), fin = c.latLon(c.marks.fin);
+  const wrong = c.latLon(G.offset(c.marks.m1, 90, 80));
+  const opsFixes = [];
+  for (let s = -1500; s <= sim.tEnd + 60; s += 5) opsFixes.push([T + s * 1000, cb.lat, cb.lon, 4, 0, null]);
+  const marks = [
+    [T - 1400000, 'm1', wrong.lat, wrong.lon, 5, 300],        // 打ち直す前の上マーク
+    [T - 1200000, 'm1', m1.lat, m1.lon, 5, 300],
+    [T - 900000, 'm4', m4.lat, m4.lon, 5, 300],
+    [T - 700000, 'fin', fin.lat, fin.lon, 5, 300],
+    [T - 600000, 'start', cb.lat, cb.lon, 4, 200],            // ゼネラルリコールになったスタート
+    [T - 590000, 'start-cancel', null, null, null, null],
+    [T, 'start', cb.lat, cb.lon, 4, 200]
+  ];
+  const opsFile = JSON.stringify({ format: 'yacht-track', version: 1, sail: 'RC', name: '本部船', started: iso, fixes: opsFixes, ops: true, marks: marks, log: [] });
+  const tracks = files.map((f, i) => RT.importer.parse(f, 'b' + i + '.json')).concat([RT.importer.parse(opsFile, 'ops.json')]);
+  ok(tracks[5].ops && !tracks[0].ops, '運営艇の記録と選手の記録を見分ける');
+  ok(tracks[5].marks.length === 7, '運営艇の記録を読み取る');
+  const st = RT.importer.starts(tracks);
+  ok(st.length === 1 && st[0] === T, '取り消したスタートは数えない (' + st.length + '件)');
+  const oc = RT.importer.opsCourse(tracks, st[0]);
+  ok(oc && oc.found.m1 && oc.found.m4 && oc.found.fin, 'マーク3個の位置を取り出す');
+  ok(RT.importer.opsCourse(tracks.slice(0, 5), st[0]) === null, '運営艇の記録が無ければ何もしない');
+  // わざと「いつもの設定」（別の場所・別の風軸）から始めて、運営艇の記録で上書きする
+  const c2 = RT.course.build(Object.assign({}, RT.course.DEFAULTS, oc.relocate), oc.overrides);
+  const back = (pt) => { const q = c2.latLon(pt); return c.proj.toXY(q.lat, q.lon); };
+  near(G.dist(back(c2.cb), c.cb), 0, 0.5, '本部船の位置');
+  near(G.dist(back(c2.marks.m1), c.marks.m1), 0, 0.5, '上マークは打ち直した後の位置');
+  near(G.dist(back(c2.marks.m4), c.marks.m4), 0, 0.5, '下マークの位置');
+  near(G.dist(back(c2.marks.fin), c.marks.fin), 0, 0.5, 'フィニッシュマークの位置');
+  near(G.norm180(oc.relocate.windMag - p.windMag), 0, 1, '風軸を上下マークの向きから求める');
+  const data = RT.importer.build(tracks.filter(tr => !tr.ops), c2, st[0]);
+  ok(data.boats.length === 5 && data.t0 === sim.t0, '選手5艇を、スタート時刻を基準に並べ直す');
+  const gates2 = RT.race.gates(c2);
+  const ev2 = RT.race.analyze(gates2, data.boats);
+  let worst = 0;
+  ev2.forEach((e, i) => {
+    ok(e.length === gates2.length, '艇' + i + ' の全ゲート通過を再現 (' + e.length + '/' + gates2.length + ')');
+    for (let j = 0; j < Math.min(e.length, evTruth[i].length); j++) worst = Math.max(worst, Math.abs(e[j] - evTruth[i][j]));
+  });
+  ok(worst < 1, '回航時刻が元のレースと一致 (最大のずれ ' + worst.toFixed(2) + '秒)');
+  // 2レース目: マークを打ち直してからスタートした場合は、新しい位置を使う
+  const m1b = c.latLon(G.offset(c.marks.m1, 0, 100));
+  const marks2 = marks.concat([[T + 2400000, 'm1', m1b.lat, m1b.lon, 5, 300], [T + 3000000, 'start', cb.lat, cb.lon, 4, 200]]);
+  const ops2 = RT.importer.parse(JSON.stringify({ format: 'yacht-track', version: 1, sail: 'RC', name: '本部船', started: iso, fixes: opsFixes, ops: true, marks: marks2, log: [] }));
+  const st2 = RT.importer.starts([ops2]);
+  ok(st2.length === 2, '1日に2レースあればスタートが2件');
+  const r1 = RT.importer.opsCourse([ops2], st2[0]), r2 = RT.importer.opsCourse([ops2], st2[1]);
+  near(r1.overrides.m1.lat, m1.lat, 1e-9, '1レース目は当時の上マーク');
+  near(r2.overrides.m1.lat, m1b.lat, 1e-9, '2レース目は打ち直した上マーク');
+  // スタート信号を押した位置が無いときは、その時刻の運営艇の位置を本部船とする
+  const ops3 = RT.importer.parse(JSON.stringify({ format: 'yacht-track', version: 1, sail: 'RC', name: '本部船', started: iso, fixes: opsFixes, ops: true, marks: [[T, 'start', null, null, null, null]], log: [] }));
+  const r3 = RT.importer.opsCourse([ops3], T);
+  near(r3.relocate.lat, cb.lat, 1e-9, '位置なしのスタートは、運営艇の航跡から本部船の位置を出す');
+  console.log('  5艇のレースを記録ファイル経由で再現: 回航時刻の最大のずれ ' + worst.toFixed(2) + '秒');
+}
+
 console.log('\n' + (failed ? 'NG ' + failed + ' 件 / ' : '') + 'OK ' + passed + ' 件');
 process.exit(failed ? 1 : 0);

@@ -142,9 +142,99 @@
     logEvent(resume ? 'resume' : 'start');
     clearInterval(st.timer);
     st.timer = setInterval(render, 1000);
-    $('who').textContent = st.meta.sail + '　' + st.meta.name;
+    $('who').textContent = st.meta.sail + '　' + st.meta.name + (st.meta.ops ? '（運営艇）' : '');
+    $('opsPanel').hidden = !st.meta.ops;
+    renderOps();
     showScreen('live');
     render();
+  }
+
+  // ---------- 運営艇の記録（マークの位置とスタート信号） ----------
+  var MARK_NAMES = { m1: '上マーク', m4: '下マーク', fin: 'フィニッシュマーク' };
+  var SEQ_MS = 5 * 60 * 1000;   // スタート手順は5分前から
+
+  function clock(ms) {
+    var d = new Date(ms);
+    return pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+  }
+  /* いまの位置で記録を1件作る。位置がまだ取れていなければ null。 */
+  function snapshot(type, atMs) {
+    var f = st.fixes[st.fixes.length - 1];
+    if (!f) return null;
+    return [atMs || Date.now(), type, f[1], f[2], f[3], Math.max(0, Date.now() - f[0])];
+  }
+  function addMark(ev) {
+    st.meta.marks.push(ev);
+    store.set(META, st.meta);
+    renderOps();
+  }
+  /* 取り消されていないスタートの一覧 */
+  function validStarts() {
+    var out = [];
+    st.meta.marks.forEach(function (m) {
+      if (m[1] === 'start') out.push(m); else if (m[1] === 'start-cancel') out.pop();
+    });
+    return out;
+  }
+  function startSequence() {
+    st.meta.seq = Date.now() + SEQ_MS;
+    store.set(META, st.meta);
+    logEvent('seq-start');
+    renderOps();
+  }
+  function cancelSequence() {
+    st.meta.seq = null;
+    store.set(META, st.meta);
+    logEvent('seq-cancel');
+    renderOps();
+  }
+  /* カウントダウンが0になったら、スタートを自動で記録する。画面が止まっていて遅れても、予定の時刻で記録する。 */
+  function tickOps() {
+    if (!st.meta || !st.meta.ops || !st.meta.seq || Date.now() < st.meta.seq) return;
+    var at = st.meta.seq;
+    st.meta.seq = null;
+    addMark(snapshot('start', at) || [at, 'start', null, null, null, null]);
+  }
+  function seqLabel(leftMs) {
+    if (leftMs > 240000) return '予告信号（クラス旗 掲揚）';
+    if (leftMs > 60000) return '準備信号（P旗 掲揚）';
+    return '1分前（P旗 降下）';
+  }
+  function renderOps() {
+    if (!st.meta || !st.meta.ops) return;
+    var marks = $('opsMarks');
+    marks.textContent = '';
+    Object.keys(MARK_NAMES).forEach(function (type) {
+      var last = null;
+      st.meta.marks.forEach(function (m) { if (m[1] === type) last = m; });
+      var li = document.createElement('li');
+      if (last) li.textContent = MARK_NAMES[type] + '　' + clock(last[0]) + ' に記録（精度 ±' + Math.round(last[4]) + 'm）';
+      else { li.textContent = MARK_NAMES[type] + '　未記録'; li.className = 'none'; }
+      marks.appendChild(li);
+    });
+    var starts = validStarts(), list = $('opsStarts');
+    list.textContent = '';
+    starts.forEach(function (m, i) {
+      var li = document.createElement('li');
+      li.textContent = '第' + (i + 1) + 'レース　' + clock(m[0]) + ' スタート';
+      list.appendChild(li);
+    });
+    $('btnStartCancel').hidden = starts.length === 0;
+    var cd = $('opsCountdown'), seq = st.meta.seq;
+    cd.hidden = !seq;
+    $('btnSeq').textContent = seq ? 'スタート手順を取り消す（延期）' : 'スタート手順を開始（5分前）';
+    $('btnSeq').classList.toggle('primary', !seq);
+    if (seq) {
+      var left = Math.max(0, seq - Date.now()), s = Math.ceil(left / 1000);
+      cd.textContent = '';
+      var b = document.createElement('b');
+      b.textContent = Math.floor(s / 60) + ':' + pad(s % 60);
+      var sp = document.createElement('span');
+      sp.textContent = seqLabel(left);
+      var sp2 = document.createElement('span');
+      sp2.textContent = clock(seq) + ' スタート';
+      cd.appendChild(b); cd.appendChild(sp); cd.appendChild(sp2);
+    }
   }
 
   function start() {
@@ -156,8 +246,14 @@
       return;
     }
     err.hidden = true;
-    store.set(PROFILE, { sail: sail, name: name });
-    st.meta = { sail: sail, name: name, started: Date.now(), chunks: 0, stopped: false, log: [] };
+    var ops = $('opsMode').checked;
+    store.set(PROFILE, { sail: sail, name: name, ops: ops });
+    st.meta = {
+      sail: sail, name: name, started: Date.now(), chunks: 0, stopped: false, log: [],
+      ops: ops,      // 運営艇として記録しているか
+      marks: [],     // 運営艇の記録: [時刻ms, 種類, 緯度, 経度, 精度m, 位置の古さms]
+      seq: null      // スタート手順の進行中なら、予定しているスタート時刻
+    };
     st.fixes = []; st.saved = 0; st.dist = 0; st.storageFull = false;
     beginRecording(false);
   }
@@ -169,6 +265,7 @@
     st.recording = false;
     flush(true);
     st.meta.stopped = true;
+    st.meta.seq = null;   // 進行中のスタート手順は、記録を終えたら無効にする
     logEvent('stop');
     store.set(META, st.meta);
     leaveDark();
@@ -213,6 +310,7 @@
 
   function render() {
     if (!st.meta) return;
+    if (st.meta.ops && st.recording) { tickOps(); if (st.meta.seq) renderOps(); }
     var elapsed = fmtDuration((Date.now() - st.meta.started) / 1000);
     $('vElapsed').textContent = elapsed;
     $('vCount').textContent = st.fixes.length;
@@ -259,6 +357,10 @@
       device: navigator.userAgent,
       columns: ['time_ms', 'lat', 'lon', 'accuracy_m', 'speed_mps', 'heading_deg'],
       fixes: st.fixes,
+      // 運営艇の記録。種類は m1=上マーク, m4=下マーク, fin=フィニッシュマーク, start=スタート信号, start-cancel=直前のスタートの取り消し
+      ops: !!st.meta.ops,
+      mark_columns: ['time_ms', 'type', 'lat', 'lon', 'accuracy_m', 'fix_age_ms'],
+      marks: st.meta.marks || [],
       log: st.meta.log
     };
   }
@@ -297,8 +399,9 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 10000);
   }
 
-  /* 押し間違いを防ぐ: 1回目で確認の文言に変わり、数秒以内の2回目で実行する */
-  function twoStep(btn, armedText, action) {
+  /* 押し間違いを防ぐ: 1回目で確認の文言に変わり、数秒以内の2回目で実行する。
+   * onArm を渡すと1回目に呼ぶ（false を返したら何もしない）。位置や時刻を1回目の瞬間に覚えるのに使う。 */
+  function twoStep(btn, armedText, action, onArm) {
     var normal = btn.textContent, timer = null;
     btn.addEventListener('click', function () {
       if (btn.classList.contains('armed')) {
@@ -308,9 +411,43 @@
         action();
         return;
       }
+      if (onArm && onArm() === false) return;
       btn.classList.add('armed');
       btn.textContent = armedText;
-      timer = setTimeout(function () { btn.classList.remove('armed'); btn.textContent = normal; }, 4000);
+      timer = setTimeout(function () { btn.classList.remove('armed'); btn.textContent = normal; }, 5000);
+    });
+  }
+
+  /* 運営艇のボタン。1回目に押した瞬間の位置と時刻を覚え、2回目で確定する。 */
+  function bindOps() {
+    function needFix() {
+      var s = $('vStatus');
+      s.textContent = 'まだ位置が取れていません。GPS を受信してから押してください。';
+      s.className = 'status bad';
+    }
+    [['btnM1', 'm1'], ['btnM4', 'm4'], ['btnFin', 'fin']].forEach(function (p) {
+      var pending = null;
+      twoStep($(p[0]), 'もう一度押すと、この位置で確定します', function () {
+        if (pending) addMark(pending);
+        pending = null;
+      }, function () {
+        pending = snapshot(p[1]);
+        if (!pending) { needFix(); return false; }
+      });
+    });
+    var pendingStart = null;
+    twoStep($('btnStartNow'), 'もう一度押すと、スタートを記録します', function () {
+      if (pendingStart) { st.meta.seq = null; addMark(pendingStart); }
+      pendingStart = null;
+    }, function () {
+      var now = Date.now();
+      pendingStart = snapshot('start', now) || [now, 'start', null, null, null, null];
+    });
+    twoStep($('btnStartCancel'), 'もう一度押すと、直前のスタートを取り消します', function () {
+      addMark([Date.now(), 'start-cancel', null, null, null, null]);
+    });
+    $('btnSeq').addEventListener('click', function () {
+      if (st.meta.seq) cancelSequence(); else startSequence();
     });
   }
 
@@ -318,6 +455,7 @@
   function loadSaved() {
     var meta = store.get(META);
     if (!meta) return false;
+    if (!Array.isArray(meta.marks)) meta.marks = [];   // 運営艇モードができる前の記録
     st.meta = meta;
     st.fixes = [];
     for (var i = 0; i < meta.chunks; i++) {
@@ -334,7 +472,7 @@
 
   function init() {
     var prof = store.get(PROFILE);
-    if (prof) { $('sail').value = prof.sail || ''; $('name').value = prof.name || ''; }
+    if (prof) { $('sail').value = prof.sail || ''; $('name').value = prof.name || ''; $('opsMode').checked = !!prof.ops; }
 
     var problem = '';
     if (!window.isSecureContext) problem = 'このページは https:// で始まるアドレスで開く必要があります。';
@@ -361,6 +499,7 @@
     twoStep($('btnStop'), 'もう一度押すと終了します', stop);
     twoStep($('btnNew'), 'もう一度押すと記録を消します', reset);
     bindDark();
+    bindOps();
 
     document.addEventListener('visibilitychange', function () {
       if (!st.recording) return;
