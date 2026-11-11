@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c2340">
+<title>航跡の記録（試作）</title>
+<link rel="stylesheet" href="css/tracker.css">
+</head>
+<body>
+<main id="app">
+  <header class="head">
+    <h1>航跡の記録</h1>
+    <p>ヨットレース トラッカー（試作）</p>
+  </header>
+
+  <section class="card warn" id="blocked" hidden>
+    <h2>このままでは記録できません</h2>
+    <p id="blockedMsg"></p>
+  </section>
+
+  <section class="card warn" id="resume" hidden>
+    <h2>前回の記録が途中で止まっています</h2>
+    <p id="resumeMsg"></p>
+    <button class="btn primary" id="btnResume" type="button">続きから記録する</button>
+    <button class="btn" id="btnFinish" type="button">ここで終了して書き出す</button>
+  </section>
+
+  <section class="card" id="setup">
+    <label class="field">セール番号
+      <input id="sail" type="text" inputmode="numeric" autocomplete="off" maxlength="8" placeholder="例: 211034">
+    </label>
+    <label class="field">名前
+      <input id="name" type="text" autocomplete="off" maxlength="12" placeholder="例: 佐藤">
+    </label>
+    <p class="err" id="setupErr" hidden></p>
+    <button class="btn primary" id="btnStart" type="button">記録を開始</button>
+    <p class="note">記録はこのスマホの中にだけ保存されます。どこにも送信されません。</p>
+  </section>
+
+  <section class="card" id="live" hidden>
+    <p class="who" id="who"></p>
+    <div class="grid">
+      <div class="cell"><span class="lab">経過</span><span class="val" id="vElapsed">0:00:00</span></div>
+      <div class="cell"><span class="lab">記録点数</span><span class="val" id="vCount">0</span></div>
+      <div class="cell"><span class="lab">GPS の精度</span><span class="val" id="vAcc">–</span></div>
+      <div class="cell"><span class="lab">艇速</span><span class="val" id="vSpd">–</span></div>
+    </div>
+    <p class="status" id="vStatus" role="status"></p>
+    <button class="btn primary" id="btnDark" type="button">航海モードにする</button>
+    <p class="note">航海モードは、画面を真っ黒にしてタッチを受け付けなくします。防水ケースに入れる直前に押してください。記録は続きます。</p>
+    <button class="btn danger" id="btnStop" type="button">記録を終了</button>
+  </section>
+
+  <section class="card" id="done" hidden>
+    <h2>記録を終了しました</h2>
+    <p id="summary"></p>
+    <button class="btn primary" id="btnShare" type="button">ファイルを共有する</button>
+    <button class="btn" id="btnSave" type="button">ファイルを保存する</button>
+    <button class="btn" id="btnResume2" type="button">続きから記録する</button>
+    <button class="btn quiet" id="btnNew" type="button">この記録を消して最初に戻る</button>
+    <p class="note">共有や保存をしてから消してください。消した記録は元に戻せません。</p>
+  </section>
+
+  <section class="card tips">
+    <h2>使い方のこつ</h2>
+    <ul>
+      <li>記録中は、このページを開いたままにしてください。ほかのアプリに切り替えたり画面が消えたりすると、記録が止まります。</li>
+      <li>画面の明るさは、先に一番暗くしておくと電池が長持ちします。</li>
+      <li>iPhone は「アクセスガイド」を使うと、水滴での誤操作を防げます。</li>
+      <li>レース中に画面を見てよいかは、クラスルールや帆走指示書に従ってください。</li>
+    </ul>
+  </section>
+</main>
+
+<div id="dark" hidden>
+  <div class="dark-info">
+    <span id="dElapsed">0:00:00</span>
+    <span id="dState">記録中</span>
+  </div>
+  <button id="btnUnlock" type="button">長押しで解除</button>
+</div>
+
+<script src="js/tracker.js"></script>
+</body>
+</html>

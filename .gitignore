@@ -1,0 +1,30 @@
+# ここに書いたファイルやフォルダは、Git の管理対象から外れ、GitHub に上がりません。
+# 公開リポジトリに「入れてはいけないもの」を、うっかり入れないための安全網です。
+
+# --- 実際の航跡データ（選手の名前と位置情報が入るので公開しない） ---
+data/
+tracks/
+track_*.json
+track_*.txt
+*.gpx
+
+# --- 秘密の値（将来サーバーを使うときの API キーやパスワードなど） ---
+.env
+.env.*
+*.pem
+*.key
+*.p12
+secrets*
+credentials*
+
+# --- この PC だけの設定・作業用ファイル ---
+.claude/
+.vscode/
+.idea/
+node_modules/
+*.log
+
+# --- OS が自動で作るファイル ---
+.DS_Store
+Thumbs.db
+desktop.ini

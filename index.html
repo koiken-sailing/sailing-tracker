@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ヨットレース トラッカー（試作）</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<div id="app">
+
+  <aside id="panel" aria-label="操作パネル">
+    <header class="brand">
+      <div>
+        <h1>ヨットレース トラッカー</h1>
+        <p class="brand-sub">ILCA・上下コース</p>
+      </div>
+      <span class="badge" title="艇の動きはシミュレーションです">試作・シミュレーション</span>
+    </header>
+
+    <nav class="tabs" role="tablist">
+      <button class="tab is-active" role="tab" data-tab="watch" aria-selected="true">観戦</button>
+      <button class="tab" role="tab" data-tab="analysis" aria-selected="false">分析</button>
+      <button class="tab" role="tab" data-tab="ops" aria-selected="false">運営</button>
+      <button class="tab" role="tab" data-tab="crew" aria-selected="false">選手</button>
+    </nav>
+
+    <!-- 観戦 -->
+    <section class="tabpane" id="tab-watch" role="tabpanel">
+      <div class="status-line" id="raceStatus"></div>
+      <table class="board" id="board">
+        <thead>
+          <tr><th class="c-rank">順位</th><th class="c-sail">セール番号</th><th>名前</th><th class="c-st">状況</th><th class="c-spd">艇速</th><th class="c-gap">差</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+
+      <p class="hint board-hint">行か地図上の艇をクリックすると、その艇の航跡を強調します。複数選んで見比べられます。</p>
+      <div class="board-actions"><button class="btn btn-quiet" id="btnClearSel" type="button" hidden>選択をすべて解除</button></div>
+      <div id="boatCards"></div>
+
+      <div class="section">
+        <h2>表示</h2>
+        <div class="row">
+          <label for="optLabel">艇のラベル</label>
+          <select id="optLabel">
+            <option value="namespd">名前と艇速</option>
+            <option value="name">名前</option>
+            <option value="sail">セール番号</option>
+            <option value="none">なし</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="optOrient">地図の向き</label>
+          <select id="optOrient">
+            <option value="wind">風上を上</option>
+            <option value="north">北を上</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="optTail">航跡</label>
+          <select id="optTail">
+            <option value="all">すべて残す</option>
+            <option value="300">直近5分</option>
+            <option value="120">直近2分</option>
+          </select>
+        </div>
+        <div class="row">
+          <label for="optBase">地図</label>
+          <select id="optBase">
+            <option value="pale">地図（淡色）</option>
+            <option value="photo">航空写真</option>
+          </select>
+        </div>
+      </div>
+    </section>
+
+    <!-- 分析 -->
+    <section class="tabpane" id="tab-analysis" role="tabpanel" hidden>
+      <div class="section">
+        <h2>スタートとコース取り</h2>
+        <div class="row">
+          <label for="anaLeg">見る区間</label>
+          <select id="anaLeg"></select>
+        </div>
+        <label class="check"><input type="checkbox" id="anaTrailOnly" checked> 地図の航跡をこの区間だけにする</label>
+        <p class="estimate" id="anaInfo" hidden></p>
+      </div>
+      <table class="board ana" id="anaTable">
+        <thead>
+          <tr><th class="c-rank">順</th><th>名前</th><th class="c-side"><div class="side-head"><span id="anaHL">左</span><span id="anaHR">右</span></div></th><th class="c-num" id="anaH1">タック</th><th class="c-num" id="anaH2">所要</th><th class="c-num" id="anaH3">距離</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+      <p class="hint board-hint" id="anaHintLeg">このレグを早く走り終えた順に並べています。左右は、風上に向かって見たときのレグ中心線からのずれです。帯は通った範囲、縦線は平均の位置を表します。距離は実際に走った長さです。行をクリックすると、その艇の航跡を強調します。</p>
+      <p class="hint board-hint" id="anaHintStart" hidden>ラインを切った順に並べています。縦線は、ラインのどこを切ったかを表します（左が下マーク、右が本部船）。「遅れ」はスタート信号からライン通過までの秒数、「艇速」は切った瞬間の速さ、「信号時」は信号の瞬間にラインまで残っていた距離です。GPS には数mの誤差があるので、リコールの判定には使えません。</p>
+    </section>
+
+    <!-- 運営 -->
+    <section class="tabpane" id="tab-ops" role="tabpanel" hidden>
+      <div class="section">
+        <h2>コース設計</h2>
+        <div class="row">
+          <label for="pWind">風軸（コンパス角度）</label>
+          <div class="field"><input type="number" id="pWind" min="0" max="359" step="5"><span class="unit">°</span></div>
+        </div>
+        <input type="range" id="pWindRange" min="0" max="355" step="5" aria-label="風軸">
+        <p class="hint" id="declNote"></p>
+        <div class="row">
+          <label for="pD14">上下の距離</label>
+          <div class="field"><input type="number" id="pD14" min="200" max="3000" step="50"><span class="unit">m</span></div>
+        </div>
+        <div class="row">
+          <label for="pStartLen">スタートラインの長さ<br><small>（本部船〜下マーク）</small></label>
+          <div class="field"><input type="number" id="pStartLen" min="30" max="400" step="10"><span class="unit">m</span></div>
+        </div>
+        <div class="row">
+          <label for="pFinLen">フィニッシュラインの長さ</label>
+          <div class="field"><input type="number" id="pFinLen" min="20" max="150" step="5"><span class="unit">m</span></div>
+        </div>
+        <div class="row">
+          <label for="pLaps">周回数</label>
+          <div class="field"><input type="number" id="pLaps" min="1" max="4" step="1"><span class="unit">周</span></div>
+        </div>
+        <div class="row">
+          <label for="pWindKn">風速</label>
+          <div class="field"><input type="number" id="pWindKn" min="4" max="20" step="1"><span class="unit">kt</span></div>
+        </div>
+        <p class="estimate" id="estimate"></p>
+      </div>
+
+      <div class="section">
+        <h2>本部船の位置</h2>
+        <p class="hint">地図上の本部船やマークは、ドラッグで動かせます。マークを動かすと「実際に打った位置」として扱います。</p>
+        <div class="btn-row">
+          <button class="btn" id="btnCbCenter">地図の中心に置く</button>
+          <button class="btn" id="btnCbHere">現在地に置く</button>
+        </div>
+        <button class="btn btn-quiet" id="btnResetMarks" hidden>マークを目標位置に戻す</button>
+      </div>
+
+      <div class="section">
+        <h2>スタート</h2>
+        <button class="btn btn-primary" id="btnSequence">スタートシーケンスを開始（5分前）</button>
+        <label class="check"><input type="checkbox" id="optSound"> 音と声で知らせる（等速再生のとき）</label>
+      </div>
+
+      <div class="section">
+        <h2>マーク位置</h2>
+        <p class="hint">方位はコンパス角度です。</p>
+        <table class="marks" id="markTable"><tbody></tbody></table>
+        <table class="marks" id="legTable"><tbody></tbody></table>
+      </div>
+
+      <div class="section">
+        <button class="btn btn-quiet" id="btnResetAll">設定をすべて初期値に戻す</button>
+      </div>
+    </section>
+
+    <!-- 選手 -->
+    <section class="tabpane" id="tab-crew" role="tabpanel" hidden>
+      <div class="section">
+        <h2>セール番号と名前</h2>
+        <p class="hint">本番では、選手が自分のスマホで入力します。ここでは表示の確認用に書き換えられます。</p>
+        <p class="hint"><a href="tracker.html">スマホ用の記録画面を開く</a></p>
+        <table class="crew" id="crewTable">
+          <thead><tr><th></th><th>セール番号</th><th>名前</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+  </aside>
+
+  <main id="stage">
+    <div id="map" aria-label="レース海面の地図"></div>
+    <button id="panelToggle" class="map-btn" aria-label="パネルを開閉">☰</button>
+
+    <div id="player">
+      <button id="btnPlay" class="play" aria-label="再生">▶</button>
+      <div class="clock">
+        <div class="clock-main" id="clockMain">0:00</div>
+        <div class="clock-sub" id="clockSub"></div>
+      </div>
+      <input type="range" id="seek" min="0" max="100" step="1" value="0" aria-label="再生位置">
+      <select id="speed" aria-label="再生速度">
+        <option value="1">等速</option>
+        <option value="5">5倍</option>
+        <option value="10" selected>10倍</option>
+        <option value="30">30倍</option>
+        <option value="60">60倍</option>
+      </select>
+    </div>
+  </main>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://unpkg.com/leaflet-rotate@0.2.8/dist/leaflet-rotate.js"></script>
+<script src="js/geo.js"></script>
+<script src="js/course.js"></script>
+<script src="js/sim.js"></script>
+<script src="js/race.js"></script>
+<script src="js/analysis.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

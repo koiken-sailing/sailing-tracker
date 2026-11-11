@@ -1,0 +1,353 @@
+:root {
+  --navy: #0c2340;
+  --navy-2: #163a63;
+  --ink: #17212b;
+  --muted: #5b6b7a;
+  --line: #dde3ea;
+  --bg: #f3f5f8;
+  --surface: #ffffff;
+  --accent: #0b6bd3;
+  --accent-ink: #ffffff;
+  --mark: #f26a1b;
+  --warn: #b45309;
+  --radius: 8px;
+  --font: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  font-family: var(--font);
+  font-size: 14px;
+  line-height: 1.5;
+  color: var(--ink);
+  background: var(--bg);
+}
+button, input, select { font: inherit; color: inherit; }
+
+#app { display: flex; height: 100vh; height: 100dvh; }
+
+/* ---------- パネル ---------- */
+#panel {
+  width: 372px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  z-index: 1100;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 14px 16px;
+  background: var(--navy);
+  color: #fff;
+}
+.brand h1 { margin: 0; font-size: 16px; font-weight: 700; letter-spacing: .02em; }
+.brand-sub { margin: 2px 0 0; font-size: 12px; color: #b9c8da; }
+.badge {
+  flex: none;
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .14);
+  color: #e6eef8;
+  white-space: nowrap;
+}
+
+.tabs { display: flex; border-bottom: 1px solid var(--line); background: var(--surface); position: sticky; top: 0; z-index: 2; }
+.tab {
+  flex: 1;
+  padding: 10px 0;
+  border: 0;
+  border-bottom: 3px solid transparent;
+  background: none;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+}
+.tab:hover { color: var(--ink); }
+.tab.is-active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab:focus-visible, .btn:focus-visible, .play:focus-visible, .map-btn:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+
+.tabpane { padding: 4px 0 24px; }
+.section { padding: 14px 16px 4px; border-top: 1px solid var(--line); }
+.tabpane > .section:first-child { border-top: 0; }
+.section h2 { margin: 0 0 10px; font-size: 13px; font-weight: 700; color: var(--navy); }
+.hint { margin: 4px 0 10px; font-size: 12px; color: var(--muted); }
+
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
+.row label { color: var(--ink); }
+.field { display: flex; align-items: center; gap: 6px; }
+.unit { width: 18px; color: var(--muted); font-size: 12px; }
+input[type="number"], select, input[type="text"] {
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid #c5ced8;
+  border-radius: 6px;
+  background: #fff;
+}
+input[type="number"] { width: 84px; text-align: right; font-variant-numeric: tabular-nums; }
+input[type="number"]:focus, select:focus, input[type="text"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+input[type="range"] { width: 100%; accent-color: var(--accent); }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 6px 12px;
+  border: 1px solid #c5ced8;
+  border-radius: 6px;
+  background: #fff;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn:hover { background: #f1f5f9; }
+.btn-primary { width: 100%; background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.btn-primary:hover { background: #0a5cb6; }
+.btn-quiet { width: 100%; margin-top: 8px; color: var(--muted); font-weight: 500; }
+.btn-row { display: flex; gap: 8px; }
+.btn-row .btn { flex: 1; }
+.check { display: flex; align-items: center; gap: 8px; margin: 10px 0 6px; font-size: 13px; }
+
+.estimate {
+  margin: 12px 0 8px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: #eef4fb;
+  color: var(--navy);
+  font-size: 13px;
+}
+.estimate b { font-size: 15px; }
+
+/* ---------- 順位表 ---------- */
+.status-line { padding: 10px 16px; font-size: 13px; color: var(--muted); }
+.board { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.board th {
+  padding: 6px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+.board td { padding: 7px 4px; border-bottom: 1px solid #eef1f4; white-space: nowrap; }
+.board th:first-child, .board td:first-child { padding-left: 16px; }
+.board th:last-child, .board td:last-child { padding-right: 16px; text-align: right; }
+.board tbody tr { cursor: pointer; }
+.board tbody tr:hover { background: #f5f8fb; }
+.board tbody tr.is-selected { background: #e8f1fc; }
+.c-rank { width: 44px; }
+.board td.rank { font-weight: 700; }
+.board td.name { max-width: 96px; overflow: hidden; text-overflow: ellipsis; }
+.board td.st { color: var(--muted); font-size: 12px; }
+.board td.gap { font-size: 13px; }
+.dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+
+.board th.c-spd, .board td.spd { text-align: right; padding-right: 8px; }
+.board td.spd { font-size: 13px; }
+
+/* 分析タブ */
+.ana th.c-num, .ana td.num { text-align: right; font-size: 12px; }
+.ana th.c-side { width: 92px; }
+.side-head { display: flex; justify-content: space-between; }
+.ana td.side { padding-top: 6px; padding-bottom: 3px; }
+.sidebar { position: relative; height: 12px; border-radius: 3px; background: #e9eef3; }
+.sidebar::before { content: ""; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #9aa7b4; }
+.sidebar-range { position: absolute; top: 2px; bottom: 2px; border-radius: 2px; opacity: .8; }
+.sidebar-mean { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink); }
+.side-text { margin-top: 2px; font-size: 10px; line-height: 1.2; color: var(--muted); text-align: center; }
+.legsum { margin: 8px 0 0; padding: 8px 0 0; list-style: none; border-top: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.legsum:empty { display: none; }
+.legsum b { color: var(--ink); font-weight: 600; }
+.north-dot {
+  display: inline-block; width: 0; height: 0; margin-right: 2px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 7px solid #d92d20;
+}
+
+.board-hint { margin: 10px 16px 0; }
+.board-actions { padding: 0 16px; }
+.card {
+  margin: 12px 16px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: #fbfcfd;
+}
+.card-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.card-title { font-weight: 700; }
+.card-close { border: 0; background: none; font-size: 18px; line-height: 1; color: var(--muted); cursor: pointer; padding: 2px 6px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+.stat { padding: 6px 8px; border-radius: 6px; background: #f1f4f7; }
+.stat-label { font-size: 11px; color: var(--muted); }
+.stat-value { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.events { margin: 0; padding: 0; list-style: none; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.events b { color: var(--ink); font-weight: 600; }
+
+/* ---------- マーク表・選手表 ---------- */
+.marks { width: 100%; border-collapse: collapse; margin-bottom: 12px; font-size: 12px; font-variant-numeric: tabular-nums; }
+.marks td { padding: 6px 4px; border-bottom: 1px solid #eef1f4; vertical-align: top; }
+.marks td:first-child { font-weight: 600; white-space: nowrap; padding-left: 0; }
+.marks td:last-child { text-align: right; white-space: nowrap; padding-right: 0; }
+.marks .pos { color: var(--muted); }
+.marks .moved { color: var(--warn); }
+
+.crew { width: 100%; border-collapse: collapse; }
+.crew th { font-size: 11px; color: var(--muted); text-align: left; padding: 4px; font-weight: 600; }
+.crew td { padding: 3px 4px; }
+.crew td:first-child { width: 20px; }
+.crew input { width: 100%; }
+
+/* ---------- 地図 ---------- */
+#stage { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+#map { flex: 1; min-height: 0; background: #dfe9f2; }
+.leaflet-container { font-family: var(--font); }
+
+.map-btn {
+  display: none;
+  position: absolute;
+  top: 10px; left: 10px;
+  z-index: 1000;
+  width: 40px; height: 40px;
+  border: 0;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .4);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.boat { position: relative; width: 22px; height: 22px; }
+.boat svg { display: block; width: 22px; height: 22px; transform-origin: 50% 50%; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)); }
+.boat-label {
+  position: absolute;
+  top: 20px; left: 50%;
+  transform: translateX(-50%);
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .88);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  white-space: nowrap;
+  color: var(--ink);
+  pointer-events: none;
+}
+.boat.is-selected .boat-label { background: var(--navy); color: #fff; }
+.boat.is-selected svg { transform-origin: 50% 50%; scale: 1.25; }
+.boat.is-dim { opacity: .4; }
+
+.mark { position: relative; width: 20px; height: 20px; }
+.mark-dot {
+  width: 20px; height: 20px;
+  border-radius: 50%;
+  background: var(--mark);
+  border: 2px solid #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .45);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+  cursor: grab;
+}
+.mark.is-cb .mark-dot { border-radius: 4px; background: var(--navy); }
+.mark-name {
+  position: absolute;
+  left: 24px; top: 1px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .88);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.mark.label-left .mark-name { left: auto; right: 24px; }
+.ghost {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  border: 2px dashed var(--mark);
+  background: rgba(242, 106, 27, .12);
+}
+
+.wind {
+  width: 84px;
+  padding: 8px 6px 6px;
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .35);
+  text-align: center;
+}
+.wind svg { display: block; margin: 0 auto 2px; }
+.wind-deg { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.wind-cap { font-size: 10px; color: var(--muted); }
+
+.fit-btn {
+  width: 34px; height: 34px;
+  border: 0;
+  border-radius: 4px;
+  background: #fff;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, .4);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+/* ---------- 再生バー ---------- */
+#player {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 16px;
+  background: var(--navy);
+  color: #fff;
+}
+.play {
+  flex: none;
+  width: 44px; height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: #fff;
+  color: var(--navy);
+  font-size: 16px;
+  cursor: pointer;
+}
+.play:hover { background: #e6eef8; }
+.clock { flex: none; width: 190px; }
+.clock-main { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1.2; }
+.clock-sub { font-size: 12px; color: #b9c8da; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#seek { flex: 1; min-width: 60px; accent-color: #7fb7ff; }
+#speed { flex: none; height: 34px; border: 1px solid rgba(255, 255, 255, .35); background: var(--navy-2); color: #fff; border-radius: 6px; }
+
+/* ---------- 狭い画面 ---------- */
+@media (max-width: 860px) {
+  #panel {
+    position: absolute;
+    top: 0; bottom: 0; left: 0;
+    width: min(372px, 92vw);
+    transform: translateX(-100%);
+    transition: transform .2s ease;
+    box-shadow: 4px 0 16px rgba(0, 0, 0, .25);
+  }
+  #app.panel-open #panel { transform: none; }
+  .map-btn { display: block; }
+  .leaflet-top.leaflet-left { top: 50px; }
+  #player { gap: 10px; padding: 8px 10px; flex-wrap: wrap; }
+  .clock { width: 150px; }
+  #seek { order: 5; flex-basis: 100%; }
+  #speed { margin-left: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #panel { transition: none; }
+}
