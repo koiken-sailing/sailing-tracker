@@ -611,6 +611,60 @@ async function cloudRoundTrip() {
     await C.join(PASS);
     await C.upload('recB', mk('1002', 'あか', 0.002));
 
+    // ---- リアルタイム（記録中の位置を送る・読む）----
+    {
+      const noon = new Date(); noon.setHours(12, 0, 0, 0);
+      const NOW = noon.getTime();
+      const line = (dx, n, t0) => { const o = []; for (let i = 0; i < n; i++) o.push([t0 + i * 1000, 34.68 + i * 2e-5, 135.32 + dx, 5, null, null]); return o; };
+      const all = line(0.002, 200, NOW - 199000);                         // 艇B の200秒ぶんの記録
+      const recent = C.livePick(all, all[199][0] - C.LIVE_TAIL_MS, Infinity, 0, false);
+      ok(recent.length === 15 && recent[14][0] === NOW, '「いまの位置」には直近15秒ぶんを入れる');
+      const thin = C.livePick(all, 0, Infinity, 2000, false);
+      ok(thin.length === 100, '航跡のかたまりは2秒に1点に間引く');
+      ok(C.livePick([[NOW, 35, 135.9, 5]], 0, Infinity, 0, false).length === 0, '範囲の外の位置は、リアルタイムでも送らない');
+      ok(C.livePick([[NOW, 35, 135.9, 5]], 0, Infinity, 0, true).length === 1, '陸上テスト用の入口のときだけ、範囲の外も送る');
+      const infoB = { sail: '1002', nick: 'あか', ops: false, marks: [[NOW - 1000, 'm1', 34.69, 135.32, 5, 100], [NOW - 500, 'm4', 35.5, 135.9, 5, 100]] };
+      const sent = await C.liveNow('recB', infoB, recent, false);          // いまの端末は B
+      ok(sent.day === C.dayOf(NOW) && sent.t === NOW, 'いまの位置を送れる');
+      await C.liveChunk('recB', thin.slice(0, 60));
+      await C.liveChunk('recB', thin.slice(60));
+
+      useDevice('A');
+      code = '';
+      try { await C.liveNow('recB', infoB, recent, false); } catch (e) { code = e.code; }
+      ok(code === 'denied', '他の端末の「いまの位置」は書き換えられない');
+      ok(C.joined(), 'リアルタイムの送信に失敗しても、合言葉の登録の印は消さない');
+      code = '';
+      try { await C.liveChunk('recB', thin.slice(0, 5)); } catch (e) { code = e.code; }
+      ok(code === 'denied', '他の端末の航跡には足せない');
+      code = '';
+      try { await C.liveEnd('recB', sent.day); } catch (e) { code = e.code; }
+      ok(code === 'denied', '他の端末のリアルタイムの記録は消せない');
+      await C.liveNow('recA', { sail: '1001', nick: 'あお', ops: true, marks: [] }, line(0, 10, NOW - 9000), false);
+
+      useDevice('C');           // 合言葉を登録していない端末
+      code = '';
+      try { await C.liveNow('recC', infoB, recent, false); } catch (e) { code = e.code; }
+      ok(code === 'denied', '合言葉を登録していない端末は、リアルタイムも送れない');
+
+      useDevice('viewer');      // 見る人は、登録も合言葉も要らない
+      const live = await C.liveRead(sent.day);
+      const lb = live.find(v => v.id === 'recB'), la = live.find(v => v.id === 'recA');
+      ok(live.length === 2 && lb && la, '全艇のいまの位置を読める');
+      ok(lb.nick === 'あか' && lb.sail === '1002' && !lb.ops && la.ops, 'セール番号・ニックネーム・運営艇かどうかが分かる');
+      ok(lb.fixes.length === 15 && lb.t === NOW && Math.abs(lb.fixes[14][1] - recent[14][1]) < 1e-6, '直近の位置がそのまま戻る');
+      ok(lb.marks.length === 2 && lb.marks[0][2] === 34.69 && lb.marks[1][2] === null, 'マークの位置も届く（範囲の外で打ったマークの位置は送らない）');
+      const tail = await C.liveTrail(sent.day, 'recB', NOW - 100000);
+      ok(tail.length >= 49 && tail.length <= 51 && tail.every((f, i) => i === 0 || f[0] > tail[i - 1][0]), '少し前からの航跡を、時刻順に読める (' + tail.length + '点)');
+      ok((await C.liveTrail(sent.day, 'recB', 0)).length === 100, '航跡のかたまりをすべて読める');
+      ok((await C.liveRead('2020-01-01')).length === 0, '記録中の艇がいない日は空');
+
+      useDevice('B');
+      ok(await C.liveEnd('recB', sent.day) === true, '自分のリアルタイムの記録は消せる');
+      useDevice('viewer');
+      ok((await C.liveRead(sent.day)).length === 1 && (await C.liveTrail(sent.day, 'recB', 0)).length === 0, '消したあとは、いまの位置も航跡も残らない');
+    }
+
     useDevice('viewer');     // 見る人は、登録も合言葉も要らない
     const list = await C.days();
     ok(list.length === 1 && list[0] === '2026-11-15', '日付の一覧を読める');

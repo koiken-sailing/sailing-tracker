@@ -20,6 +20,10 @@
   var MAX_LOG = 400;
   var KN = 0.514444;
   var JOIN_WAIT_MS = 8000; // 開始時に合言葉を確かめる通信を待つ長さ（これを過ぎたら記録を先に始める）
+  var LIVE_PREV = 'yt-live-prev';   // 前回リアルタイムで送った記録（次に記録を始めたときに、送り先から消す）
+  var LIVE_EVERY_MS = 5000;         // いまの位置を送る間隔
+  var LIVE_CHUNK_MS = 60000;        // 航跡のかたまりを送る間隔
+  var LIVE_STEP_MS = 2000;          // 航跡のかたまりは、2秒に1点に間引く
 
   // 陸上テスト用の入口（アドレスの末尾に ?test=1）。この入口から始めた記録だけ、海の上でなくても送る。
   var LAND_TEST = /[?&]test=1(&|$)/.test(location.search);
@@ -58,7 +62,9 @@
     storageFull: false,
     timer: null,
     wakePending: false,
-    send: ''             // 送信の状態: ''（未送信または送信済み）/ sending / none / net / passcode / server
+    send: '',            // 送信の状態: ''（未送信または送信済み）/ sending / none / net / passcode / server
+    live: { nowAt: 0, chunkFrom: 0, busy: false, joinAt: 0, ok: null, err: '', sent: 0 },   // リアルタイムの送信の状態
+    map: null            // リアルタイムモードの地図（初めて開いたときに作る）
   };
 
   function haversine(lat1, lon1, lat2, lon2) {
@@ -106,6 +112,7 @@
     }
     if (spd !== null) st.lastSpeed = spd;
     st.fixes.push([tms, round(c.latitude, 6), round(c.longitude, 6), round(c.accuracy, 1), spd, hdg]);
+    if (st.map) st.map.setSelf([tms, c.latitude, c.longitude]);
     flush(false);
     render();
   }
@@ -164,6 +171,9 @@
     $('opsStartBox').hidden = !st.meta.ops;
     $('btnFin').hidden = !st.meta.ops;
     $('sessionNote').hidden = !st.meta.practice;
+    $('btnLive').hidden = !cloudOn;
+    $('liveNote').hidden = !cloudOn;
+    st.live = { nowAt: 0, chunkFrom: 0, busy: false, joinAt: 0, ok: null, err: '', sent: 0 };
     renderOps();
     showScreen('live');
     render();
@@ -393,8 +403,83 @@
     logEvent('stop');
     store.set(META, st.meta);
     leaveDark();
+    leaveLive();
     showDone();
     sendNow();
+  }
+
+  // ---------- リアルタイムの送信（記録中、5秒ごとにいまの位置を送る） ----------
+  // 失敗しても記録には影響させない。記録の全体は、終了時にあらためて送る。
+  function liveTick() {
+    if (!cloudOn || !st.recording || !st.meta || !st.meta.pub || !st.fixes.length) return;
+    var now = Date.now(), lv = st.live;
+    if (lv.busy || now - lv.nowAt < LIVE_EVERY_MS) return;
+    lv.nowAt = now;
+    function done() { lv.busy = false; }
+    if (!cloud.joined()) {
+      // 開始時に合言葉を確かめられなかったときは、1分おきに確かめ直す
+      if (!st.meta.pass || now - lv.joinAt < 60000) return;
+      lv.joinAt = now;
+      lv.busy = true;
+      cloud.join(st.meta.pass).then(done, done);
+      return;
+    }
+    var anywhere = !!st.meta.land, meta = st.meta;
+    var lastT = st.fixes[st.fixes.length - 1][0];
+    var recent = cloud.livePick(st.fixes, lastT - cloud.LIVE_TAIL_MS, Infinity, 0, anywhere);
+    if (!recent.length) return;   // 公開してよい範囲の外にいる
+    lv.busy = true;
+    var info = { sail: meta.sail, nick: meta.name, ops: meta.ops, marks: meta.marks };
+    cloud.liveNow(meta.cid, info, recent, anywhere).then(function (r) {
+      lv.sent++;
+      if (lv.sent === 1 && r) {
+        // 前回の記録のリアルタイム分が送り先に残っていれば消し、今回の分を覚えておく
+        var prev = store.get(LIVE_PREV);
+        if (prev && prev.cid && prev.cid !== meta.cid) cloud.liveEnd(prev.cid, prev.day).catch(function () {});
+        store.set(LIVE_PREV, { cid: meta.cid, day: r.day });
+      }
+      // 1分ぶんたまったら、航跡のかたまりも送る（途中から見始めた人が、少し前からの航跡を見られるように）
+      if (!lv.chunkFrom) lv.chunkFrom = Math.max(st.fixes[0][0] - 1, lastT - 15 * 60000);
+      if (lastT - lv.chunkFrom < LIVE_CHUNK_MS) return null;
+      var part = cloud.livePick(st.fixes, lv.chunkFrom, lastT, LIVE_STEP_MS, anywhere).slice(-450);
+      if (!part.length) { lv.chunkFrom = lastT; return null; }
+      return cloud.liveChunk(meta.cid, part).then(function () { lv.chunkFrom = lastT; });
+    }).then(function () { lv.ok = true; lv.err = ''; }, function (e) { lv.ok = false; lv.err = (e && e.code) || 'error'; }).then(done);
+  }
+
+  // ---------- リアルタイムモード（地図を表示・タッチ無効） ----------
+  function enterLive() {
+    if (!cloudOn || !window.RT || !RT.livemap) return;
+    leaveDark();
+    $('liveView').hidden = false;
+    logEvent('live-on');
+    $('lCount').textContent = '地図を読み込んでいます…';
+    RT.livemap.loadLeaflet().then(function () {
+      if ($('liveView').hidden) return;   // 読み込んでいる間に解除された
+      if (!st.map) {
+        st.map = RT.livemap.create($('liveMap'), {
+          selfId: (st.meta && st.meta.cid) || 'me',
+          interactive: false,
+          onStatus: function (s) {
+            $('lCount').textContent = s.error ? s.error : 'ほか ' + Math.max(0, s.moving - (st.meta && st.meta.pub ? 1 : 0)) + '艇';
+            $('lCount').className = s.error ? 'bad' : '';
+          }
+        });
+      }
+      // それまでの自分の航跡を渡してから、ほかの艇の読み込みを始める
+      st.map.setSelfHistory(st.fixes.slice(-900).map(function (f) { return [f[0], f[1], f[2]]; }));
+      st.map.start();
+      st.map.refit();
+    }).catch(function () {
+      $('lCount').textContent = '地図を読み込めませんでした';
+      $('lCount').className = 'bad';
+    });
+  }
+  function leaveLive() {
+    if ($('liveView').hidden) return;
+    $('liveView').hidden = true;
+    if (st.map) st.map.stop();
+    logEvent('live-off');
   }
 
   // ---------- 観戦ページへの送信 ----------
@@ -464,7 +549,7 @@
     $('passField').hidden = !pub || cloud.joined();
     $('landNote').hidden = !(LAND_TEST && pub);
     $('setupNote').textContent = pub ?
-      '記録はまずこのスマホの中に保存され、記録を終了したときに観戦ページへ送られます。' :
+      '記録はまずこのスマホの中に保存されます。記録中は5秒ごとにいまの位置を、記録を終了したときに全体を、観戦ページへ送ります。' :
       '記録はこのスマホの中にだけ保存されます。どこにも送信されません。';
   }
 
@@ -511,6 +596,7 @@
   function render() {
     if (!st.meta) return;
     if (st.meta.ops && st.recording) { tickOps(); if (st.meta.seq) renderOps(); }
+    liveTick();
     var elapsed = fmtDuration((Date.now() - st.meta.started) / 1000);
     $('vElapsed').textContent = elapsed;
     $('vCount').textContent = st.fixes.length;
@@ -523,26 +609,35 @@
     $('dElapsed').textContent = elapsed;
     $('dState').textContent = s[1] === 'bad' ? '確認が必要です' : '記録中';
     $('dState').className = s[1] === 'bad' ? 'bad' : '';
+    $('lElapsed').textContent = elapsed;
+    $('lSpd').textContent = st.lastSpeed === null ? '' : (st.lastSpeed / KN).toFixed(1) + 'kt';
+    $('lState').textContent = s[1] === 'bad' ? '確認が必要です' : '記録中';
+    $('lState').className = s[1] === 'bad' ? 'bad' : '';
   }
 
   // ---------- 航海モード（黒い画面・タッチ無効） ----------
-  function enterDark() { $('dark').hidden = false; logEvent('dark-on'); }
+  function enterDark() { leaveLive(); $('dark').hidden = false; logEvent('dark-on'); }
   function leaveDark() {
     if ($('dark').hidden) return;
     $('dark').hidden = true;
     logEvent('dark-off');
   }
-  function bindDark() {
-    var btn = $('btnUnlock'), timer = null;
+  /* 画面全体を覆うモード（航海モード・リアルタイムモード）の、長押しでの解除 */
+  function bindHold(btn, cover, leave) {
+    var timer = null;
     function cancel() { clearTimeout(timer); timer = null; btn.classList.remove('holding'); }
     btn.addEventListener('pointerdown', function (e) {
       e.preventDefault();
       btn.classList.add('holding');
-      timer = setTimeout(function () { cancel(); leaveDark(); }, HOLD_MS);
+      timer = setTimeout(function () { cancel(); leave(); }, HOLD_MS);
     });
     ['pointerup', 'pointercancel', 'pointerleave'].forEach(function (ev) { btn.addEventListener(ev, cancel); });
-    $('dark').addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
-    $('dark').addEventListener('contextmenu', function (e) { e.preventDefault(); });
+    cover.addEventListener('touchmove', function (e) { e.preventDefault(); }, { passive: false });
+    cover.addEventListener('contextmenu', function (e) { e.preventDefault(); });
+  }
+  function bindDark() {
+    bindHold($('btnUnlock'), $('dark'), leaveDark);
+    bindHold($('btnLiveUnlock'), $('liveView'), leaveLive);
   }
 
   // ---------- 書き出し ----------
@@ -724,6 +819,7 @@
       if (st.recording && st.meta && st.meta.seq && snd.armedFor !== st.meta.seq) armSound(false);
     });
     $('btnDark').addEventListener('click', enterDark);
+    $('btnLive').addEventListener('click', enterLive);
     $('btnShare').addEventListener('click', share);
     $('btnSave').addEventListener('click', download);
     twoStep($('btnStop'), 'もう一度押すと終了します', stop);
@@ -761,5 +857,5 @@
   init();
 
   // 動作確認用
-  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase, sendNow: sendNow, snd: snd };
+  window.YTTracker = { st: st, buildFile: buildFile, fileBase: fileBase, sendNow: sendNow, snd: snd, liveTick: liveTick };
 })();

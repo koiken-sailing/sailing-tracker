@@ -1,0 +1,128 @@
+/* リアルタイムの地図の部品（記録ページと live.html の両方で使う） */
+.lv-boat { position: relative; }
+.lv-boat svg { display: block; transform-origin: 50% 50%; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .35)); }
+.lv-boat.is-stale { opacity: .45; }
+.lv-label {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  margin-left: 4px;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .92);
+  color: #17212b;
+  font: 600 12px/1.5 "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  white-space: nowrap;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .2);
+}
+.lv-label:empty { display: none; }
+.lv-boat.is-self .lv-label { background: #0c2340; color: #fff; font-size: 13px; }
+
+.lv-mark { position: relative; width: 20px; height: 20px; }
+.lv-mark-dot {
+  width: 20px;
+  height: 20px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #f26a1b;
+  color: #fff;
+  font: 700 11px/16px "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  text-align: center;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .4);
+}
+.lv-mark-name {
+  position: absolute;
+  left: 24px;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, .92);
+  color: #17212b;
+  font: 600 12px/1.5 "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif;
+  white-space: nowrap;
+}
+
+/* 記録ページのリアルタイムモード: 画面全体を地図にして、タッチを受け付けない */
+#liveView {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: flex;
+  flex-direction: column;
+  background: #dfe7ef;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.lv-top {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  padding: calc(8px + env(safe-area-inset-top)) 14px 8px;
+  background: #0c2340;
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}
+.lv-top b { font-size: 22px; }
+.lv-top span { font-size: 14px; color: #b9c8da; }
+.lv-top .bad { color: #ffb4a8; }
+#liveMap { flex: 1; min-height: 0; pointer-events: none; }
+.lv-bottom { padding: 10px 16px calc(12px + env(safe-area-inset-bottom)); background: #0c2340; }
+.lv-bottom p { margin: 0 0 8px; font-size: 13px; color: #b9c8da; text-align: center; }
+#btnLiveUnlock {
+  display: block;
+  width: 100%;
+  min-height: 56px;
+  border: 1px solid #5b7393;
+  border-radius: 12px;
+  background: #16335a;
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  touch-action: none;
+}
+#btnLiveUnlock.holding { background: #2a5593; border-color: #9db8dc; }
+
+/* 岸から見るページ（live.html） */
+.lv-page { display: flex; flex-direction: column; height: 100vh; height: 100dvh; margin: 0; font-family: "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", system-ui, sans-serif; }
+.lv-page .lv-top { flex-wrap: wrap; }
+.lv-page .lv-top h1 { margin: 0; font-size: 17px; }
+.lv-page #liveMap { pointer-events: auto; }
+.lv-page .lv-bottom { display: flex; gap: 10px; align-items: center; }
+.lv-page .lv-bottom a, .lv-page .lv-bottom button {
+  flex: 1;
+  box-sizing: border-box;
+  min-height: 44px;
+  margin: 0;
+  padding: 8px 12px;
+  line-height: 1.4;
+  border: 1px solid #5b7393;
+  border-radius: 10px;
+  background: #16335a;
+  color: #fff;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: center;
+  text-decoration: none;
+  cursor: pointer;
+}
+.lv-page .lv-bottom a { display: flex; align-items: center; justify-content: center; }
+.lv-empty {
+  position: absolute;
+  left: 50%;
+  top: 40%;
+  z-index: 1000;
+  transform: translate(-50%, -50%);
+  max-width: 80%;
+  padding: 12px 16px;
+  border-radius: 10px;
+  background: rgba(12, 35, 64, .92);
+  color: #fff;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}

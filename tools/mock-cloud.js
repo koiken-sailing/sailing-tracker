@@ -4,19 +4,20 @@
  *
  * 本物と同じ決まり（tools/firebase-rules.json）をまねている:
  *   合言葉が合った端末だけが書き込める / 他人の記録は書き換えられない / 読むのは誰でもできる
+ *   リアルタイムの位置（/live, /liveTrail）も同じ。こちらは持ち主が自分の分を消せる
  * データはメモリの中だけに置き、止めると消える。 */
 'use strict';
 const http = require('http');
 
 function start(port, passcode) {
-  const db = { members: {}, days: {}, tracks: {} };
+  const db = { members: {}, days: {}, tracks: {}, live: {}, liveTrail: {} };
   let seq = 0;
 
   function send(res, status, body) {
     res.writeHead(status, {
       'Content-Type': 'application/json; charset=utf-8',
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, PUT, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, PUT, POST, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type',
       'Cache-Control': 'no-store'
     });
@@ -86,6 +87,47 @@ function start(port, passcode) {
       }
       if (parts[0] === 'tracks' && parts.length === 3 && req.method === 'PUT') {
         return writeRecord('tracks', parts[1], parts[2], uid, body, ['v', 'uid', 'sail', 'nick', 'first', 'last', 'n', 'f', 'm']) ? send(res, 200, body) : denied(res);
+      }
+      // ---- リアルタイム ----
+      const dayOk = d => /^\d{4}-\d{2}-\d{2}$/.test(d);
+      if (parts[0] === 'live' && parts.length === 2 && req.method === 'GET') {
+        const node = db.live[parts[1]];
+        return send(res, 200, node && Object.keys(node).length ? node : null);
+      }
+      if (parts[0] === 'live' && parts.length === 3) {
+        const day = parts[1], id = parts[2], old = db.live[day] && db.live[day][id];
+        if (!uid || !db.members[uid] || !dayOk(day) || (old && old.u !== uid)) return denied(res);
+        if (req.method === 'DELETE') { if (old) delete db.live[day][id]; return send(res, 200, null); }
+        if (req.method !== 'PUT' || !body || body.u !== uid) return denied(res);
+        const allowed = ['u', 's', 'n', 'o', 't', 'p', 'm'];
+        if (!Object.keys(body).every(k => allowed.includes(k))) return denied(res);
+        if (typeof body.s !== 'string' || body.s.length > 12 || typeof body.n !== 'string' || body.n.length > 20) return denied(res);
+        if (typeof body.t !== 'number' || typeof body.p !== 'string' || body.p.length >= 2000) return denied(res);
+        (db.live[day] = db.live[day] || {})[id] = body;
+        return send(res, 200, body);
+      }
+      if (parts[0] === 'liveTrail' && (parts.length === 3 || parts.length === 4)) {
+        const day = parts[1], id = parts[2];
+        if (req.method === 'GET' && parts.length === 3) {
+          let node = (db.liveTrail[day] && db.liveTrail[day][id]) || null;
+          const startAt = u.searchParams.get('startAt');
+          if (node && u.searchParams.get('orderBy') === '"$key"' && startAt) {
+            const from = JSON.parse(startAt), cut = {};
+            Object.keys(node).filter(k => k >= from).forEach(k => { cut[k] = node[k]; });
+            node = Object.keys(cut).length ? cut : null;
+          }
+          return send(res, 200, node);
+        }
+        // 書き込みと削除は、その艇の「いまの位置」の持ち主だけ
+        const owner = db.live[day] && db.live[day][id] && db.live[day][id].u;
+        if (!uid || owner !== uid) return denied(res);
+        if (req.method === 'DELETE' && parts.length === 3) { if (db.liveTrail[day]) delete db.liveTrail[day][id]; return send(res, 200, null); }
+        if (req.method === 'PUT' && parts.length === 4 && typeof body === 'string' && body.length < 4000 && parts[3].length <= 12) {
+          db.liveTrail[day] = db.liveTrail[day] || {};
+          (db.liveTrail[day][id] = db.liveTrail[day][id] || {})[parts[3]] = body;
+          return send(res, 200, body);
+        }
+        return denied(res);
       }
       return denied(res);
     });

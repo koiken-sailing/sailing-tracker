@@ -109,6 +109,31 @@
     return out;
   }
 
+  /* 運営艇・マーク練習の記録（マークの位置、スタート）を、送る形に整える。
+   * 範囲の外で打ったマークは、位置を落として時刻と種類だけを残す。 */
+  function packMarks(list, anywhere) {
+    var marks = [];
+    (Array.isArray(list) ? list : []).forEach(function (m) {
+      if (!Array.isArray(m) || !MARK_TYPES[m[1]] || !isFinite(m[0])) return;
+      var okPos = m[2] !== null && m[3] !== null && isFinite(m[2]) && isFinite(m[3]) && (anywhere || inArea(m[2], m[3]));
+      var out = okPos ? [m[0], m[1], m[2], m[3]] : [m[0], m[1], null, null];
+      if (m[1] === 'start' && validLaps(m[6])) out.push(m[6]);    // スタートには周回数を付ける
+      marks.push(out);
+    });
+    return marks.slice(0, 200);
+  }
+  /* 送られてきたマークの記録を、記録ファイルと同じ並び（時刻, 種類, 緯度, 経度, 精度, 位置の古さ, 周回数）に戻す */
+  function unpackMarks(text) {
+    var marks = [];
+    try {
+      (JSON.parse(text || '[]') || []).forEach(function (m) {
+        if (!Array.isArray(m) || !MARK_TYPES[m[1]]) return;
+        marks.push([Number(m[0]), m[1], m[2], m[3], null, null, validLaps(m[4]) ? m[4] : null]);
+      });
+    } catch (e) { marks = []; }
+    return marks;
+  }
+
   /* 記録ファイル（記録ページの buildFile の形）から、送る中身を作る。
    * 範囲の中に位置が2点以上なければ null（＝送るものがない）。
    * opts.anywhere が真なら、範囲の制限をかけない（陸上テスト用の入口から始めた記録だけ）。 */
@@ -120,14 +145,7 @@
     });
     if (inside.length > MAX_FIXES) inside = inside.slice(inside.length - MAX_FIXES);
     if (inside.length < 2) return null;
-    var marks = [];
-    (Array.isArray(file.marks) ? file.marks : []).forEach(function (m) {
-      if (!Array.isArray(m) || !MARK_TYPES[m[1]] || !isFinite(m[0])) return;
-      var okPos = m[2] !== null && m[3] !== null && isFinite(m[2]) && isFinite(m[3]) && (anywhere || inArea(m[2], m[3]));
-      var out = okPos ? [m[0], m[1], m[2], m[3]] : [m[0], m[1], null, null];
-      if (m[1] === 'start' && validLaps(m[6])) out.push(m[6]);    // スタートには周回数を付ける
-      marks.push(out);
-    });
+    var marks = packMarks(file.marks, anywhere);
     var first = inside[0][0], last = inside[inside.length - 1][0];
     return {
       day: dayOf(first),
@@ -139,7 +157,7 @@
         ops: !!file.ops,
         first: first, last: last, n: inside.length,
         f: encodeFixes(inside),
-        m: JSON.stringify(marks.slice(0, 200))
+        m: JSON.stringify(marks)
       }
     };
   }
@@ -147,14 +165,7 @@
   /* 公開された記録1件を、記録ファイルと同じ形に戻す（観戦ページは、ファイルと同じ手順で読み込める） */
   function unpack(rec) {
     if (!rec || typeof rec.f !== 'string') throw new Error('記録を読み取れません');
-    var marks = [];
-    try {
-      (JSON.parse(rec.m || '[]') || []).forEach(function (m) {
-        if (!Array.isArray(m) || !MARK_TYPES[m[1]]) return;
-        // 記録ファイルと同じ並び（時刻, 種類, 緯度, 経度, 精度, 位置の古さ, 周回数）に戻す
-        marks.push([Number(m[0]), m[1], m[2], m[3], null, null, validLaps(m[4]) ? m[4] : null]);
-      });
-    } catch (e) { marks = []; }
+    var marks = unpackMarks(rec.m);
     return {
       format: 'yacht-track', version: 1,
       sail: clean(rec.sail, 12), name: clean(rec.nick, 20),
@@ -294,10 +305,115 @@
     });
   }
 
+  // ---------- リアルタイム（記録中の位置を数秒ごとに送る・読む） ----------
+  // 置き方:
+  //   /live/{日付}/{記録ID}              … いまの位置（直近15秒ぶん）と、セール番号・ニックネーム・マーク
+  //   /liveTrail/{日付}/{記録ID}/{分}    … 航跡のかたまり（2秒に1点に間引いたもの）。途中から見始めた人のため
+  // 記録を終えたあとの正式な記録（/tracks）とは別物で、次に記録を始めるときに自分の分を消す。
+  var LIVE_TAIL_MS = 15000;
+  var LIVE_CHUNK_MAX_MS = 16 * 60 * 1000;
+
+  /* 送る位置を選ぶ: sinceMs より後・untilMs 以前で、公開してよい範囲の中のもの。stepMs おきに間引く（0 なら間引かない）。 */
+  function livePick(fixes, sinceMs, untilMs, stepMs, anywhere) {
+    var i = fixes.length;
+    while (i > 0 && fixes[i - 1][0] > sinceMs) i--;
+    var out = [], lastT = -Infinity;
+    for (; i < fixes.length; i++) {
+      var f = fixes[i];
+      if (f[0] > untilMs) break;
+      if (!(anywhere || inArea(f[1], f[2]))) continue;
+      if (stepMs && f[0] - lastT < stepMs) continue;
+      out.push(f);
+      lastT = f[0];
+    }
+    return out;
+  }
+
+  /* リアルタイムの通信の結果を確かめる。失敗しても、合言葉の登録の印には触れない
+   * （リアルタイムが使えなくても、記録の終了時の送信はそのまま行えるようにするため）。 */
+  function liveCheck(r) {
+    if (r.status === 401 || r.status === 403) throw fail('denied', 'リアルタイムの送信が許可されていません');
+    if (r.status !== 200) throw fail('server', '送り先でエラーが起きました');
+    return r;
+  }
+
+  /* いまの位置を送る。info = { sail, nick, ops, marks }、fixes は livePick で選んだ直近の位置。 */
+  function liveNow(id, info, fixes, anywhere) {
+    if (!fixes.length) return Promise.resolve(null);
+    return ensureAuth().then(function (s) {
+      var body = {
+        u: s.uid, s: clean(info.sail, 12), n: clean(info.nick, 20), o: !!info.ops,
+        t: fixes[fixes.length - 1][0], p: encodeFixes(fixes)
+      };
+      var marks = packMarks(info.marks, anywhere);
+      if (marks.length) body.m = JSON.stringify(marks);
+      var day = dayOf(body.t);
+      return http('PUT', dbUrl('live/' + day + '/' + id, 'auth=' + encodeURIComponent(s.id)), body).then(liveCheck)
+        .then(function () { return { day: day, t: body.t }; });
+    });
+  }
+
+  /* 航跡のかたまりを1つ足す。置き場所の名前は、最初の位置の時刻（分）。 */
+  function liveChunk(id, fixes) {
+    if (!fixes.length) return Promise.resolve(null);
+    return ensureAuth().then(function (s) {
+      var day = dayOf(fixes[0][0]), key = String(Math.floor(fixes[0][0] / 60000));
+      return http('PUT', dbUrl('liveTrail/' + day + '/' + id + '/' + key, 'auth=' + encodeURIComponent(s.id)), encodeFixes(fixes))
+        .then(liveCheck).then(function () { return { day: day, key: key }; });
+    });
+  }
+
+  /* 自分のリアルタイムの記録を消す（航跡のかたまり → いまの位置、の順。持ち主の確認に「いまの位置」を使うため）。 */
+  function liveEnd(id, day) {
+    return ensureAuth().then(function (s) {
+      var q = 'auth=' + encodeURIComponent(s.id);
+      return http('DELETE', dbUrl('liveTrail/' + day + '/' + id, q)).then(liveCheck)
+        .then(function () { return http('DELETE', dbUrl('live/' + day + '/' + id, q)); }).then(liveCheck)
+        .then(function () { return true; });
+    });
+  }
+
+  /* その日の、全艇のいまの位置を読む。合言葉は要らない。
+   * 戻り値は [{ id, sail, nick, ops, t, fixes: [[時刻, 緯度, 経度, 精度]], marks }]。 */
+  function liveRead(day) {
+    return http('GET', dbUrl('live/' + day)).then(function (r) {
+      if (r.status !== 200) throw fail(r.status === 401 || r.status === 403 ? 'denied' : 'server', 'いまの位置を読めませんでした');
+      var out = [];
+      Object.keys(r.data || {}).forEach(function (id) {
+        var v = r.data[id];
+        try {
+          out.push({
+            id: id, sail: clean(v.s, 12), nick: clean(v.n, 20), ops: !!v.o, t: Number(v.t) || 0,
+            fixes: decodeFixes(String(v.p || '')), marks: unpackMarks(v.m)
+          });
+        } catch (e) { /* 壊れた1件は飛ばす */ }
+      });
+      return out;
+    });
+  }
+
+  /* ある艇の、sinceMs 以降の航跡（リアルタイム用に間引いたもの）を読む */
+  function liveTrail(day, id, sinceMs) {
+    // かたまりの名前は「最初の位置の時刻」なので、欲しい時刻より前に始まったかたまりも読む。
+    // かたまりは長くても15分ぶん（送信が続けて失敗したあとの、まとめ送り）なので、16分さかのぼる。
+    var fromKey = Math.max(0, Math.floor((sinceMs - LIVE_CHUNK_MAX_MS) / 60000));
+    var q = 'orderBy=' + encodeURIComponent('"$key"') + '&startAt=' + encodeURIComponent('"' + fromKey + '"');
+    return http('GET', dbUrl('liveTrail/' + day + '/' + id, q)).then(function (r) {
+      if (r.status !== 200) throw fail('server', '航跡を読めませんでした');
+      var fixes = [];
+      Object.keys(r.data || {}).sort().forEach(function (key) {
+        try { fixes = fixes.concat(decodeFixes(String(r.data[key]))); } catch (e) { /* 壊れたかたまりは飛ばす */ }
+      });
+      return fixes.filter(function (f) { return f[0] >= sinceMs; });
+    });
+  }
+
   RT.cloud = {
     enabled: enabled, inArea: inArea, inPolygon: inPolygon,
     encodeFixes: encodeFixes, decodeFixes: decodeFixes, pack: pack, unpack: unpack,
     dayOf: dayOf, newId: newId,
-    joined: joined, join: join, upload: upload, days: days, loadDay: loadDay
+    joined: joined, join: join, upload: upload, days: days, loadDay: loadDay,
+    LIVE_TAIL_MS: LIVE_TAIL_MS, livePick: livePick, liveNow: liveNow, liveChunk: liveChunk,
+    liveEnd: liveEnd, liveRead: liveRead, liveTrail: liveTrail
   };
 })(typeof window !== 'undefined' ? window : globalThis);

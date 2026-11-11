@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0c2340">
+<title>いまの様子（リアルタイム）</title>
+<link rel="stylesheet" href="css/live.css">
+</head>
+<body class="lv-page">
+<header class="lv-top">
+  <h1>いまの様子</h1>
+  <span id="lvCount">読み込んでいます…</span>
+  <span id="lvClock"></span>
+</header>
+<div id="liveMap" style="position:relative"></div>
+<div class="lv-empty" id="lvEmpty" hidden></div>
+<footer class="lv-bottom">
+  <button type="button" id="btnRefit">全体を表示</button>
+  <a href="index.html?day=latest">終わった記録を見る</a>
+</footer>
+
+<script src="js/geo.js"></script>
+<script src="js/config.js"></script>
+<script src="js/cloud.js"></script>
+<script src="js/livemap.js"></script>
+<script>
+/* 岸から見る、リアルタイムの画面。記録中の艇の位置を5秒おきに読んで表示する。合言葉は要らない。 */
+(function () {
+  'use strict';
+  function $(id) { return document.getElementById(id); }
+  function pad(n) { return (n < 10 ? '0' : '') + n; }
+  function fail(msg) { $('lvCount').textContent = ''; $('lvEmpty').textContent = msg; $('lvEmpty').hidden = false; }
+
+  if (!RT.cloud.enabled()) { fail('リアルタイムの表示は、まだ準備されていません。'); return; }
+  RT.livemap.loadLeaflet().then(function () {
+    var lm = RT.livemap.create($('liveMap'), {
+      interactive: true,
+      onStatus: function (s) {
+        $('lvCount').textContent = s.error ? s.error : s.boats ? '記録中 ' + s.moving + '艇（表示 ' + s.boats + '艇）' : '';
+        $('lvCount').className = s.error ? 'bad' : '';
+        $('lvEmpty').hidden = !!s.boats || !!s.error;
+        if (!s.boats && !s.error) $('lvEmpty').textContent = 'いま記録中の艇はありません。記録が始まると、ここに表示されます。';
+      }
+    });
+    lm.start();
+    $('btnRefit').addEventListener('click', function () { lm.refit(); });
+    setInterval(function () {
+      var d = new Date();
+      $('lvClock').textContent = pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+    }, 1000);
+    window.addEventListener('resize', function () { lm.map.invalidateSize(); });
+    window.RTLive = lm;   // 動作確認用
+  }).catch(function () { fail('地図を読み込めませんでした。電波のある場所で、ページを開き直してください。'); });
+})();
+</script>
+</body>
+</html>

@@ -10,6 +10,34 @@
       }
     },
 
+    "live": {
+      "$day": {
+        ".read": true,
+        "$id": {
+          ".write": "auth != null && root.child('members').child(auth.uid).exists() && (!data.exists() || data.child('u').val() === auth.uid) && (!newData.exists() || newData.child('u').val() === auth.uid)",
+          ".validate": "$day.matches(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]$/) && $id.length <= 24 && newData.hasChildren(['u', 's', 'n', 'o', 't', 'p'])",
+          "u": { ".validate": "newData.isString()" },
+          "s": { ".validate": "newData.isString() && newData.val().length <= 12" },
+          "n": { ".validate": "newData.isString() && newData.val().length <= 20" },
+          "o": { ".validate": "newData.isBoolean()" },
+          "t": { ".validate": "newData.isNumber()" },
+          "p": { ".validate": "newData.isString() && newData.val().length < 2000" },
+          "m": { ".validate": "newData.isString() && newData.val().length < 20000" },
+          "$other": { ".validate": false }
+        }
+      }
+    },
+
+    "liveTrail": {
+      "$day": {
+        "$id": {
+          ".read": true,
+          ".write": "auth != null && root.child('live').child($day).child($id).child('u').val() === auth.uid",
+          "$min": { ".validate": "newData.isString() && newData.val().length < 4000 && $min.length <= 12" }
+        }
+      }
+    },
+
     "days": {
       ".read": true,
       "$day": {
